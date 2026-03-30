@@ -1,0 +1,4 @@
+interface:
+  display_name: "Maintenance Apply"
+  short_description: "Apply approved low-risk refactors from an audit plan."
+  default_prompt: "Use $maintenance-apply to apply an approved maintenance-audit plan to this repository."

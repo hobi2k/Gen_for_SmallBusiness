@@ -1,0 +1,4 @@
+interface:
+  display_name: "Maintenance Audit"
+  short_description: "Analyze maintainability and propose safe refactors."
+  default_prompt: "Use $maintenance-audit to inspect this repository and produce a safe maintainability report."
