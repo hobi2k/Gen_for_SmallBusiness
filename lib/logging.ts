@@ -1,6 +1,8 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 
+import { getActiveSpanId, getActiveTraceId } from "@langfuse/tracing";
+
 import { GeneratedPackage, StyleRecommendation } from "@/lib/types";
 
 const LOG_DIRECTORY = path.join(process.cwd(), "storage", "logs");
@@ -63,11 +65,16 @@ export function buildStructuredLogPayload(payload: StructuredLogPayload): Struct
 export async function logEvent(eventType: string, payload: unknown): Promise<void> {
   await mkdir(LOG_DIRECTORY, { recursive: true });
 
+  const traceId = getActiveTraceId();
+  const spanId = getActiveSpanId();
+
   await appendFile(
     LOG_FILE,
     `${JSON.stringify({
       eventType,
       recordedAt: new Date().toISOString(),
+      traceId: traceId || null,
+      spanId: spanId || null,
       payload
     })}\n`,
     "utf8"

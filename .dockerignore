@@ -1,0 +1,15 @@
+.git
+.github
+.next
+.npm-cache
+.vscode
+coverage
+dist
+node_modules
+storage/logs/*.jsonl
+.env
+.env.local
+.env.*
+!.env.example
+README.md
+docs

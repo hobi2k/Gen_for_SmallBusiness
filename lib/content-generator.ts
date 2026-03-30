@@ -1,4 +1,5 @@
 import { GeneratedCopy, ProductAnalysis, PromptBundle, StyleId, StylePreset } from "@/lib/types";
+import { withLangfuseObservation } from "@/lib/langfuse";
 
 const REQUIRED_KEYS = [
   "oneLineIntro",
@@ -203,39 +204,71 @@ async function requestCopy(prompt: string, model: string): Promise<GeneratedCopy
     return null;
   }
 
-  try {
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json"
+  return withLangfuseObservation(
+    "openai.sales_copy",
+    {
+      type: "generation",
+      input: {
+        promptLength: prompt.length,
+        responseKeys: REQUIRED_KEYS
       },
-      body: JSON.stringify({
-        model,
-        input: [
-          {
-            role: "user",
-            content: [{ type: "input_text", text: prompt }]
-          }
-        ]
+      model,
+      metadata: {
+        pipeline: "sales-copy"
+      },
+      modelParameters: {
+        responseFormat: "json"
+      },
+      captureOutput: (copy) =>
+        copy
+          ? {
+              oneLineIntro: copy.oneLineIntro,
+              keywordCount: copy.keywords.length,
+              hashtagCount: copy.hashtags.length
+            }
+          : {
+              parsed: false
+            },
+      captureErrorMetadata: () => ({
+        pipeline: "sales-copy"
       })
-    });
+    },
+    async () => {
+      try {
+        const response = await fetch("https://api.openai.com/v1/responses", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model,
+            input: [
+              {
+                role: "user",
+                content: [{ type: "input_text", text: prompt }]
+              }
+            ]
+          })
+        });
 
-    if (!response.ok) {
-      return null;
+        if (!response.ok) {
+          return null;
+        }
+
+        const payload = await response.json();
+        const rawText = extractResponseText(payload);
+
+        if (!rawText) {
+          return null;
+        }
+
+        return parseGeneratedCopy(rawText);
+      } catch {
+        return null;
+      }
     }
-
-    const payload = await response.json();
-    const rawText = extractResponseText(payload);
-
-    if (!rawText) {
-      return null;
-    }
-
-    return parseGeneratedCopy(rawText);
-  } catch {
-    return null;
-  }
+  );
 }
 
 function fallbackCopy(style: StylePreset, product: ProductAnalysis): GeneratedCopy {

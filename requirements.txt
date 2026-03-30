@@ -1,0 +1,35 @@
+# This repository is a Node.js/Next.js project.
+# JavaScript package installation is managed by package.json and package-lock.json.
+# Use `npm ci` as the primary install command.
+#
+# This file is kept as an operations-facing requirements manifest so the
+# required runtime/tooling and key app dependencies are visible in one place.
+
+# Runtime toolchain
+# node >= 22
+# npm >= 11
+# docker >= 27
+# docker compose plugin >= 2
+
+# Primary install commands
+# npm ci
+# docker compose up --build
+
+# Application package versions managed in package.json
+# next@15.5.14
+# react@19.0.0
+# react-dom@19.0.0
+# typescript@5.8.2
+# @langfuse/otel@5.0.1
+# @langfuse/tracing@5.0.1
+# @opentelemetry/exporter-trace-otlp-http@0.214.0
+# @opentelemetry/sdk-node@0.214.0
+
+# Environment prerequisites
+# OPENAI_API_KEY
+# LANGFUSE_TRACING_ENABLED
+# LANGFUSE_PUBLIC_KEY
+# LANGFUSE_SECRET_KEY
+# LANGFUSE_BASE_URL
+# LANGFUSE_TRACING_ENVIRONMENT
+# LANGFUSE_RELEASE

@@ -1,4 +1,5 @@
 import { createStyleThumbnailUrl } from "@/lib/image-output";
+import { withLangfuseObservation } from "@/lib/langfuse";
 import { STYLE_LIST, STYLE_PRESETS } from "@/lib/style-presets";
 import {
   ProductAnalysis,
@@ -183,35 +184,58 @@ async function embedTexts(inputs: string[]): Promise<number[][] | null> {
     return null;
   }
 
-  try {
-    const response = await fetch("https://api.openai.com/v1/embeddings", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json"
+  return withLangfuseObservation(
+    "openai.style_embeddings",
+    {
+      type: "embedding",
+      input: {
+        inputCount: inputs.length,
+        preview: inputs.slice(0, 2)
       },
-      body: JSON.stringify({
-        model: "text-embedding-3-small",
-        input: inputs
+      model: "text-embedding-3-small",
+      metadata: {
+        pipeline: "style-recommendation"
+      },
+      captureOutput: (embeddings) => ({
+        returnedVectors: embeddings?.length ?? 0,
+        dimensions: embeddings?.[0]?.length ?? 0
+      }),
+      captureErrorMetadata: () => ({
+        pipeline: "style-recommendation"
       })
-    });
+    },
+    async () => {
+      try {
+        const response = await fetch("https://api.openai.com/v1/embeddings", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model: "text-embedding-3-small",
+            input: inputs
+          })
+        });
 
-    if (!response.ok) {
-      return null;
+        if (!response.ok) {
+          return null;
+        }
+
+        const payload = (await response.json()) as {
+          data?: Array<{ embedding?: number[] }>;
+        };
+
+        if (!payload.data?.length) {
+          return null;
+        }
+
+        return payload.data.map((item) => item.embedding ?? []);
+      } catch {
+        return null;
+      }
     }
-
-    const payload = (await response.json()) as {
-      data?: Array<{ embedding?: number[] }>;
-    };
-
-    if (!payload.data?.length) {
-      return null;
-    }
-
-    return payload.data.map((item) => item.embedding ?? []);
-  } catch {
-    return null;
-  }
+  );
 }
 
 async function getStyleEmbeddings(): Promise<number[][] | null> {

@@ -27,9 +27,11 @@
         -> 소재 가중치
         -> 전체 톤 가중치
      -> Recommendation Reason Builder
+     -> Langfuse Trace
      -> Logger
 
   -> /api/style-selection
+     -> Langfuse Trace
      -> 최종 선택 로그 저장
 
   -> /api/generate
@@ -44,11 +46,22 @@
      -> Image Orchestrator Adapter
         -> 현재: deterministic placeholder
         -> 운영 확장: SDXL + ControlNet + IP-Adapter on GCP L4
+     -> Langfuse Trace
      -> Logger
 
   -> /api/dev-seeds
      -> 6개 테스트 시드 제공
      -> 시드별 추천 결과 사전 계산
+
+[Instrumentation]
+  -> instrumentation.ts
+  -> instrumentation.node.ts
+  -> NodeSDK
+  -> LangfuseSpanProcessor
+
+[Container Runtime]
+  -> Dockerfile
+  -> docker-compose.yml
 
 [Storage]
   -> storage/logs/generation-events.jsonl
@@ -81,12 +94,19 @@
 │  ├─ globals.css
 │  ├─ layout.tsx
 │  └─ page.tsx
+├─ .dockerignore
+├─ .env.example
+├─ Dockerfile
+├─ docker-compose.yml
 ├─ docs
 │  └─ mvp-blueprint.md
+├─ instrumentation.node.ts
+├─ instrumentation.ts
 ├─ lib
 │  ├─ content-generator.ts
 │  ├─ dev-seeds.ts
 │  ├─ image-output.ts
+│  ├─ langfuse.ts
 │  ├─ logging.ts
 │  ├─ product-analyzer.ts
 │  ├─ prompt-builder.ts
@@ -400,6 +420,8 @@
 - 스타일 임베딩 캐시
 - 추천/생성 API 분리
 - 생성 시 카피와 이미지 준비를 같은 요청에서 묶되 seed는 고정
+- Docker standalone 빌드로 실행 이미지 경량화
+- Langfuse는 서버 초기화 한 번만 수행하고 요청 경로에서는 래퍼만 사용
 
 ### UX 단순성
 
@@ -419,6 +441,8 @@
 로그는 JSONL append-only 형태로 저장되며, 아래 필드를 유지한다.
 
 - `uploadIdentifier`
+- `traceId`
+- `spanId`
 - `recommendedStyles`
   - `styleId`
   - `styleName`
@@ -446,3 +470,20 @@
 - `styles_recommended`
 - `style_selected`
 - `package_generated`
+
+## 13. Docker 및 Langfuse 기본 세팅
+
+### Docker
+
+- `next.config.ts`에서 `output: "standalone"` 활성화
+- `Dockerfile`은 multi-stage build를 사용
+- `docker-compose.yml`은 앱 컨테이너와 `storage` 볼륨만 우선 구성
+- Langfuse는 compose 내부에 self-host하지 않고 외부 endpoint를 연결하는 방식으로 시작
+
+### Langfuse
+
+- `instrumentation.node.ts`에서 `NodeSDK`와 `LangfuseSpanProcessor` 초기화
+- `lib/langfuse.ts`에서 route/LLM/embedding 호출용 trace 래퍼 제공
+- 추천 API, 선택 API, 생성 API에 route-level trace 연결
+- embedding 호출과 카피 생성 호출에 nested observation 연결
+- tracing이 비활성화되면 기존 로직 그대로 no-op 동작

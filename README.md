@@ -35,6 +35,8 @@
 - 스타일 선택 이벤트 저장 API
 - 전체 콘텐츠 패키지 생성 API
 - JSONL 기반 로그 저장
+- Docker 기반 실행 기본 세팅
+- Langfuse tracing 기본 세팅
 - `OPENAI_API_KEY`가 있을 때:
   - `text-embedding-3-small`로 스타일 매칭
   - `gpt-5-mini` 1차 시도
@@ -114,19 +116,29 @@
   -> /api/recommend-styles
      -> Product Analyzer
      -> Embedding / Heuristic Recommender
+     -> Langfuse Trace
      -> Logger
 
   -> /api/style-selection
+     -> Langfuse Trace
      -> Selection Logger
 
   -> /api/generate
      -> Prompt Builder
      -> LLM Orchestrator
      -> Image Orchestrator Adapter
+     -> Langfuse Trace
      -> Logger
 
 [Storage]
   -> storage/logs/generation-events.jsonl
+
+[Observability]
+  -> Langfuse Cloud or Self-hosted Endpoint
+
+[Container Runtime]
+  -> Dockerfile
+  -> docker-compose.yml
 ```
 
 상세 설계 문서:
@@ -139,17 +151,25 @@
 .
 ├─ app
 │  ├─ api
+│  │  ├─ dev-seeds/route.ts
 │  │  ├─ generate/route.ts
 │  │  ├─ recommend-styles/route.ts
 │  │  └─ style-selection/route.ts
 │  ├─ globals.css
 │  ├─ layout.tsx
 │  └─ page.tsx
+├─ .dockerignore
+├─ .env.example
+├─ Dockerfile
 ├─ docs
 │  └─ mvp-blueprint.md
+├─ instrumentation.node.ts
+├─ instrumentation.ts
 ├─ lib
 │  ├─ content-generator.ts
+│  ├─ dev-seeds.ts
 │  ├─ image-output.ts
+│  ├─ langfuse.ts
 │  ├─ logging.ts
 │  ├─ product-analyzer.ts
 │  ├─ prompt-builder.ts
@@ -157,6 +177,7 @@
 │  ├─ style-recommender.ts
 │  ├─ types.ts
 │  └─ utils.ts
+├─ docker-compose.yml
 ├─ storage
 │  └─ logs
 ├─ package.json
@@ -246,11 +267,26 @@ npm run typecheck
 npm run build
 ```
 
+### 5. Docker로 실행
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+기본 포트는 `3000`입니다.
+
 ## 환경 변수
 
-### 선택 사항
+### 필수는 아님
 
 - `OPENAI_API_KEY`
+- `LANGFUSE_TRACING_ENABLED`
+- `LANGFUSE_PUBLIC_KEY`
+- `LANGFUSE_SECRET_KEY`
+- `LANGFUSE_BASE_URL`
+- `LANGFUSE_TRACING_ENVIRONMENT`
+- `LANGFUSE_RELEASE`
 
 설정되면 아래 모델을 사용합니다.
 
@@ -263,6 +299,13 @@ npm run build
 - 추천: 휴리스틱 기반
 - 문구 생성: 템플릿 기반
 
+Langfuse는 아래 조건일 때만 활성화됩니다.
+
+- `LANGFUSE_PUBLIC_KEY`와 `LANGFUSE_SECRET_KEY`가 모두 있음
+- `LANGFUSE_TRACING_ENABLED`가 `false` 또는 `0`이 아님
+
+기본 `.env.example`은 tracing을 꺼 둔 상태입니다.
+
 ## 로깅
 
 로그는 아래 파일에 append-only 형태로 저장됩니다.
@@ -274,6 +317,11 @@ npm run build
 - `styles_recommended`
 - `style_selected`
 - `package_generated`
+
+Langfuse를 켜면 각 로그 레코드에 아래 추적 상관관계 필드도 함께 남습니다.
+
+- `traceId`
+- `spanId`
 
 로그 목적:
 
@@ -302,6 +350,8 @@ npm run build
 - `app/api/recommend-styles/route.ts`: 스타일 추천 API
 - `app/api/style-selection/route.ts`: 선택 로그 API
 - `app/api/generate/route.ts`: 콘텐츠 패키지 생성 API
+- `instrumentation.node.ts`: Langfuse OpenTelemetry 초기화
+- `lib/langfuse.ts`: 서버 trace 래퍼
 - `lib/style-presets.ts`: 6개 고정 스타일 정의
 - `lib/style-recommender.ts`: 임베딩 + 휴리스틱 추천 로직
 - `lib/prompt-builder.ts`: 이미지/카피 프롬프트 생성
