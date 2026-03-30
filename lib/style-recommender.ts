@@ -1,8 +1,18 @@
+import { createStyleThumbnailUrl } from "@/lib/image-output";
 import { STYLE_LIST, STYLE_PRESETS } from "@/lib/style-presets";
-import { ProductAnalysis, ProductCategory, StyleId, StyleRecommendation } from "@/lib/types";
+import {
+  ProductAnalysis,
+  ProductCategory,
+  ProductColorCue,
+  ProductMaterialCue,
+  ProductSurfaceTone,
+  RecommendationResult,
+  StyleId,
+  StyleRecommendation
+} from "@/lib/types";
 import { cosineSimilarity, normalizeScore } from "@/lib/utils";
 
-const HEURISTIC_SCORES: Record<StyleId, Record<ProductCategory, number>> = {
+const BASE_CATEGORY_SCORES: Record<StyleId, Record<ProductCategory, number>> = {
   "modern-minimal": {
     plate: 0.92,
     bowl: 0.76,
@@ -59,6 +69,39 @@ const HEURISTIC_SCORES: Record<StyleId, Record<ProductCategory, number>> = {
   }
 };
 
+const COLOR_RULES: Record<StyleId, Partial<Record<ProductColorCue, number>>> = {
+  "modern-minimal": { white: 0.05, gray: 0.05, black: 0.04, clear: 0.03, brown: -0.02 },
+  "natural-wood": { beige: 0.05, brown: 0.06, earthy: 0.05, cream: 0.03, gray: -0.01 },
+  "nordic-light": { white: 0.05, gray: 0.05, clear: 0.04, blue: 0.03, brown: -0.01 },
+  "french-vintage": { cream: 0.05, pink: 0.05, ivory: 0.04, beige: 0.02, black: -0.02 },
+  "cozy-home-cafe": { cream: 0.04, brown: 0.05, beige: 0.04, earthy: 0.03, clear: 0.01 },
+  "japanese-simple-table": {
+    "low-saturation": 0.05,
+    neutral: 0.04,
+    gray: 0.03,
+    beige: 0.02,
+    pink: -0.02
+  }
+};
+
+const MATERIAL_RULES: Record<StyleId, Partial<Record<ProductMaterialCue, number>>> = {
+  "modern-minimal": { metal: 0.05, glass: 0.04, ceramic: 0.02 },
+  "natural-wood": { wood: 0.06, ceramic: 0.03, linen: 0.02, metal: -0.01 },
+  "nordic-light": { glass: 0.05, ceramic: 0.03, wood: 0.01 },
+  "french-vintage": { ceramic: 0.04, linen: 0.02, glass: 0.01, metal: -0.01 },
+  "cozy-home-cafe": { ceramic: 0.04, glass: 0.04, wood: 0.02 },
+  "japanese-simple-table": { ceramic: 0.05, wood: 0.02, metal: 0.02, glass: -0.01 }
+};
+
+const SURFACE_TONE_RULES: Record<StyleId, Partial<Record<ProductSurfaceTone, number>>> = {
+  "modern-minimal": { cool: 0.02, neutral: 0.02 },
+  "natural-wood": { warm: 0.03 },
+  "nordic-light": { cool: 0.03, neutral: 0.01 },
+  "french-vintage": { warm: 0.03 },
+  "cozy-home-cafe": { warm: 0.04 },
+  "japanese-simple-table": { neutral: 0.03, cool: 0.01 }
+};
+
 let cachedStyleEmbeddings: number[][] | null = null;
 
 function buildStyleDescriptor(styleId: StyleId): string {
@@ -69,6 +112,8 @@ function buildStyleDescriptor(styleId: StyleId): string {
     preset.lightingDescription,
     preset.sceneSetup,
     preset.colorTone,
+    preset.copyTone,
+    preset.promptKeywords.join(", "),
     preset.fitSignals.join(", ")
   ].join(" | ");
 }
@@ -78,8 +123,57 @@ function buildProductDescriptor(product: ProductAnalysis): string {
     product.categoryLabel,
     product.visualSummary,
     product.materialNotes,
+    product.colorHints.join(", "),
+    product.materialHints.join(", "),
+    product.surfaceTone,
     product.detectedTags.join(", ")
   ].join(" | ");
+}
+
+function translateColorCue(cue: ProductColorCue): string {
+  const labels: Record<ProductColorCue, string> = {
+    white: "화이트 톤",
+    ivory: "아이보리 톤",
+    cream: "크림 톤",
+    beige: "베이지 톤",
+    brown: "브라운 톤",
+    gray: "그레이 톤",
+    black: "블랙 포인트",
+    clear: "투명감",
+    blue: "블루 기운",
+    green: "그린 기운",
+    pink: "핑크 기운",
+    earthy: "어스톤",
+    "low-saturation": "낮은 채도",
+    neutral: "중성 톤",
+    unknown: "뉴트럴 톤"
+  };
+
+  return labels[cue];
+}
+
+function translateMaterialCue(cue: ProductMaterialCue): string {
+  const labels: Record<ProductMaterialCue, string> = {
+    ceramic: "세라믹 질감",
+    glass: "유리 질감",
+    wood: "우드 결감",
+    metal: "메탈 광택",
+    stone: "스톤 표면감",
+    linen: "린넨 감성",
+    mixed: "혼합 소재"
+  };
+
+  return labels[cue];
+}
+
+function translateSurfaceTone(surfaceTone: ProductSurfaceTone): string {
+  const labels: Record<ProductSurfaceTone, string> = {
+    warm: "따뜻한 전체 톤",
+    cool: "맑고 차분한 전체 톤",
+    neutral: "절제된 중성 톤"
+  };
+
+  return labels[surfaceTone];
 }
 
 async function embedTexts(inputs: string[]): Promise<number[][] | null> {
@@ -134,42 +228,118 @@ async function getStyleEmbeddings(): Promise<number[][] | null> {
   return embeddings;
 }
 
+function collectAdjustments(styleId: StyleId, product: ProductAnalysis): Array<{ label: string; delta: number }> {
+  const adjustments: Array<{ label: string; delta: number }> = [];
+
+  if (STYLE_PRESETS[styleId].fitSignals.includes(product.category)) {
+    adjustments.push({
+      label: `${product.categoryLabel} 카테고리 적합`,
+      delta: 0.03
+    });
+  }
+
+  for (const colorCue of product.colorHints) {
+    const delta = COLOR_RULES[styleId][colorCue];
+    if (typeof delta === "number" && delta !== 0) {
+      adjustments.push({
+        label: `${translateColorCue(colorCue)}과 조화`,
+        delta
+      });
+    }
+  }
+
+  for (const materialCue of product.materialHints) {
+    const delta = MATERIAL_RULES[styleId][materialCue];
+    if (typeof delta === "number" && delta !== 0) {
+      adjustments.push({
+        label: `${translateMaterialCue(materialCue)}과 적합`,
+        delta
+      });
+    }
+  }
+
+  const toneDelta = SURFACE_TONE_RULES[styleId][product.surfaceTone];
+  if (typeof toneDelta === "number" && toneDelta !== 0) {
+    adjustments.push({
+      label: `${translateSurfaceTone(product.surfaceTone)}과 일치`,
+      delta: toneDelta
+    });
+  }
+
+  return adjustments;
+}
+
 function buildReason(
   recommendation: typeof STYLE_LIST[number],
   product: ProductAnalysis,
-  score: number
-): string {
-  const scoreBand =
-    score > 0.86 ? "가장 안정적으로 어울리는 조합입니다." : "시각적 일관성이 좋은 조합입니다.";
+  adjustmentLabels: string[]
+): { reason: string; reasonHighlights: string[] } {
+  const positiveLabels = adjustmentLabels.slice(0, 3);
 
-  return `${product.categoryLabel}의 인상과 ${recommendation.name}의 ${recommendation.colorTone} 톤이 잘 맞습니다. ${scoreBand}`;
+  if (!positiveLabels.length) {
+    return {
+      reason: `${product.categoryLabel}의 인상과 ${recommendation.name}의 ${recommendation.colorTone} 톤이 안정적으로 맞습니다.`,
+      reasonHighlights: [recommendation.summary]
+    };
+  }
+
+  return {
+    reason: `${recommendation.name}은 ${positiveLabels.join(", ")} 조건이 겹쳐 ${product.categoryLabel}에 특히 잘 맞습니다.`,
+    reasonHighlights: positiveLabels
+  };
 }
 
-export async function recommendStyles(product: ProductAnalysis): Promise<StyleRecommendation[]> {
+export async function recommendStyles(product: ProductAnalysis): Promise<RecommendationResult> {
   const styleEmbeddings = await getStyleEmbeddings();
   const productEmbeddings = await embedTexts([buildProductDescriptor(product)]);
   const productEmbedding = productEmbeddings?.[0];
+  const fallbackUsed = !(productEmbedding && styleEmbeddings?.length);
 
-  return STYLE_LIST.map((style, index) => {
-    const heuristicScore = HEURISTIC_SCORES[style.id][product.category];
-    const semanticScore =
+  const allStyles = STYLE_LIST.map((style, index) => {
+    const baseHeuristic = BASE_CATEGORY_SCORES[style.id][product.category];
+    const embeddingScore =
       productEmbedding && styleEmbeddings?.[index]
-        ? (cosineSimilarity(productEmbedding, styleEmbeddings[index]) + 1) / 2
-        : heuristicScore;
-
-    const blendedScore = normalizeScore(heuristicScore * 0.6 + semanticScore * 0.4);
+        ? normalizeScore((cosineSimilarity(productEmbedding, styleEmbeddings[index]) + 1) / 2)
+        : baseHeuristic;
+    const blendedBase = baseHeuristic * 0.56 + embeddingScore * 0.44;
+    const adjustments = collectAdjustments(style.id, product);
+    const rerankDelta = adjustments.reduce((total, item) => total + item.delta, 0);
+    const rerankedScore = normalizeScore(blendedBase + rerankDelta);
+    const rankedAdjustments = adjustments
+      .sort((left, right) => Math.abs(right.delta) - Math.abs(left.delta))
+      .map((item) => `${item.label} ${item.delta > 0 ? "+" : ""}${item.delta.toFixed(2)}`);
+    const positiveHighlights = adjustments
+      .filter((item) => item.delta > 0)
+      .sort((left, right) => right.delta - left.delta)
+      .map((item) => item.label);
+    const { reason, reasonHighlights } = buildReason(style, product, positiveHighlights);
 
     return {
       styleId: style.id,
       name: style.name,
-      score: blendedScore,
-      reason: buildReason(style, product, blendedScore),
+      summary: style.summary,
+      score: rerankedScore,
+      reason,
+      reasonHighlights,
       lightingDescription: style.lightingDescription,
       sceneSetup: style.sceneSetup,
       colorTone: style.colorTone,
-      promptTemplate: style.promptTemplate
-    };
-  })
-    .sort((left, right) => right.score - left.score)
-    .slice(0, 3);
+      promptTemplate: style.promptTemplate,
+      promptKeywords: style.promptKeywords,
+      thumbnailUrl: createStyleThumbnailUrl({ styleId: style.id, category: product.category }),
+      scoreBreakdown: {
+        embeddingScore,
+        baseHeuristic,
+        rerankedScore,
+        rerankAdjustments: rankedAdjustments,
+        fallbackUsed
+      }
+    } satisfies StyleRecommendation;
+  }).sort((left, right) => right.score - left.score);
+
+  return {
+    recommendations: allStyles.slice(0, 3),
+    allStyles,
+    fallbackUsed
+  };
 }

@@ -7,6 +7,34 @@ export type ProductCategory =
   | "cutlery"
   | "tableware";
 
+export type ProductColorCue =
+  | "white"
+  | "ivory"
+  | "cream"
+  | "beige"
+  | "brown"
+  | "gray"
+  | "black"
+  | "clear"
+  | "blue"
+  | "green"
+  | "pink"
+  | "earthy"
+  | "low-saturation"
+  | "neutral"
+  | "unknown";
+
+export type ProductMaterialCue =
+  | "ceramic"
+  | "glass"
+  | "wood"
+  | "metal"
+  | "stone"
+  | "linen"
+  | "mixed";
+
+export type ProductSurfaceTone = "warm" | "cool" | "neutral";
+
 export type StyleId =
   | "modern-minimal"
   | "natural-wood"
@@ -26,6 +54,9 @@ export interface ProductAnalysis {
   categoryLabel: string;
   materialNotes: string;
   visualSummary: string;
+  colorHints: ProductColorCue[];
+  materialHints: ProductMaterialCue[];
+  surfaceTone: ProductSurfaceTone;
   detectedTags: string[];
 }
 
@@ -37,19 +68,40 @@ export interface StylePreset {
   sceneSetup: string;
   colorTone: string;
   promptTemplate: string;
+  promptKeywords: string[];
+  copyTone: string;
   palette: [string, string, string];
   fitSignals: ProductCategory[];
+}
+
+export interface StyleScoreBreakdown {
+  embeddingScore: number;
+  baseHeuristic: number;
+  rerankedScore: number;
+  rerankAdjustments: string[];
+  fallbackUsed: boolean;
 }
 
 export interface StyleRecommendation {
   styleId: StyleId;
   name: string;
+  summary: string;
   score: number;
   reason: string;
+  reasonHighlights: string[];
   lightingDescription: string;
   sceneSetup: string;
   colorTone: string;
   promptTemplate: string;
+  promptKeywords: string[];
+  thumbnailUrl: string;
+  scoreBreakdown: StyleScoreBreakdown;
+}
+
+export interface RecommendationResult {
+  recommendations: StyleRecommendation[];
+  allStyles: StyleRecommendation[];
+  fallbackUsed: boolean;
 }
 
 export interface PromptVariant {
@@ -62,6 +114,7 @@ export interface PromptBundle {
   lifestyle: PromptVariant[];
   negativePrompt: string;
   copyPrompt: string;
+  copySchema: string;
 }
 
 export interface GeneratedImage {
@@ -92,5 +145,22 @@ export interface GeneratedPackage extends GeneratedCopy {
     llmModel: string;
     imageEngine: string;
     targetLatencyMs: number;
+    recommendationFallbackUsed: boolean;
+    contentFallbackUsed: boolean;
+    fallbackUsed: boolean;
+    generatedAt: string;
   };
+}
+
+export interface DevSeed {
+  id: string;
+  title: string;
+  description: string;
+  previewUrl: string;
+  analysis: ProductAnalysis;
+}
+
+export interface DevSeedPreview extends DevSeed {
+  recommendations: StyleRecommendation[];
+  fallbackUsed: boolean;
 }

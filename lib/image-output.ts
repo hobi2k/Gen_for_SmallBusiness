@@ -1,5 +1,12 @@
 import { STYLE_PRESETS } from "@/lib/style-presets";
-import { GeneratedImage, ProductAnalysis, StyleId } from "@/lib/types";
+import {
+  GeneratedImage,
+  ProductAnalysis,
+  ProductCategory,
+  ProductColorCue,
+  ProductMaterialCue,
+  StyleId
+} from "@/lib/types";
 import { hashString, seededAspectRatios } from "@/lib/utils";
 
 function canvasSize(aspectRatio: GeneratedImage["aspectRatio"]): { width: number; height: number } {
@@ -15,8 +22,30 @@ function canvasSize(aspectRatio: GeneratedImage["aspectRatio"]): { width: number
   }
 }
 
-function productShape(category: ProductAnalysis["category"], kind: GeneratedImage["kind"]): string {
-  const baseOpacity = kind === "representative" ? 0.92 : 0.84;
+function previewPalette(colorCue: ProductColorCue): [string, string, string] {
+  const map: Record<ProductColorCue, [string, string, string]> = {
+    white: ["#f8f6f2", "#ece7e0", "#d9d3cb"],
+    ivory: ["#f7f1e6", "#eee2d2", "#d6c2a8"],
+    cream: ["#f9eedc", "#f1ddc1", "#d9b68f"],
+    beige: ["#f1e2cf", "#d8b892", "#9d7d5b"],
+    brown: ["#d9c0a4", "#a77f57", "#5e422f"],
+    gray: ["#f0f0ef", "#cbcace", "#75747d"],
+    black: ["#e7e2dc", "#8f877d", "#36312d"],
+    clear: ["#f8fbff", "#d8e6ee", "#abc2cd"],
+    blue: ["#ecf2f6", "#bad0df", "#6e91aa"],
+    green: ["#eef2eb", "#c4d1bf", "#718068"],
+    pink: ["#f5ecea", "#dfc1c0", "#b18581"],
+    earthy: ["#f3e1c6", "#c89e72", "#776046"],
+    "low-saturation": ["#f0ece5", "#c9c2b7", "#8a847b"],
+    neutral: ["#f4eee6", "#d9cec1", "#90806f"],
+    unknown: ["#f4eee6", "#d9cec1", "#90806f"]
+  };
+
+  return map[colorCue];
+}
+
+function productShape(category: ProductCategory, kind: GeneratedImage["kind"] | "thumbnail"): string {
+  const baseOpacity = kind === "representative" ? 0.92 : kind === "lifestyle" ? 0.84 : 0.9;
 
   switch (category) {
     case "plate":
@@ -36,23 +65,26 @@ function productShape(category: ProductAnalysis["category"], kind: GeneratedImag
   }
 }
 
-function buildPlaceholderUrl({
-  styleId,
+function buildArtboard({
+  palette,
   category,
   aspectRatio,
-  kind,
+  variant,
   seed
 }: {
-  styleId: StyleId;
-  category: ProductAnalysis["category"];
+  palette: [string, string, string];
+  category: ProductCategory;
   aspectRatio: GeneratedImage["aspectRatio"];
-  kind: GeneratedImage["kind"];
+  variant: GeneratedImage["kind"] | "thumbnail";
   seed: number;
 }): string {
   const { width, height } = canvasSize(aspectRatio);
-  const [base, middle, accent] = STYLE_PRESETS[styleId].palette;
-  const orbOffset = 120 + (seed % 160);
-  const sceneOpacity = kind === "representative" ? 0.22 : 0.34;
+  const [base, middle, accent] = palette;
+  const orbOffset = 120 + (seed % 180);
+  const sceneOpacity =
+    variant === "representative" ? 0.22 : variant === "lifestyle" ? 0.34 : 0.28;
+  const frameY = variant === "thumbnail" ? 360 : 300;
+  const frameHeight = variant === "thumbnail" ? 820 : 960;
 
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 1080 1440" fill="none">
@@ -66,12 +98,71 @@ function buildPlaceholderUrl({
       <rect width="1080" height="1440" fill="url(#bg)" />
       <circle cx="${orbOffset}" cy="230" r="220" fill="rgba(255,255,255,0.18)" />
       <circle cx="910" cy="1120" r="260" fill="rgba(255,255,255,0.12)" />
-      <rect x="120" y="300" width="840" height="960" rx="64" fill="rgba(255,255,255,${sceneOpacity})" />
-      ${productShape(category, kind)}
+      <rect x="120" y="${frameY}" width="840" height="${frameHeight}" rx="64" fill="rgba(255,255,255,${sceneOpacity})" />
+      ${productShape(category, variant)}
     </svg>
   `;
 
   return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+}
+
+function buildPlaceholderUrl({
+  styleId,
+  category,
+  aspectRatio,
+  kind,
+  seed
+}: {
+  styleId: StyleId;
+  category: ProductCategory;
+  aspectRatio: GeneratedImage["aspectRatio"];
+  kind: GeneratedImage["kind"];
+  seed: number;
+}): string {
+  return buildArtboard({
+    palette: STYLE_PRESETS[styleId].palette,
+    category,
+    aspectRatio,
+    variant: kind,
+    seed
+  });
+}
+
+export function createStyleThumbnailUrl({
+  styleId,
+  category
+}: {
+  styleId: StyleId;
+  category: ProductCategory;
+}): string {
+  return buildArtboard({
+    palette: STYLE_PRESETS[styleId].palette,
+    category,
+    aspectRatio: "4:5",
+    variant: "thumbnail",
+    seed: hashString(`${styleId}:${category}:thumb`)
+  });
+}
+
+export function createSeedPreviewUrl({
+  category,
+  colorCue,
+  materialCue
+}: {
+  category: ProductCategory;
+  colorCue: ProductColorCue;
+  materialCue: ProductMaterialCue;
+}): string {
+  const palette = previewPalette(colorCue);
+  const materialSeed = hashString(`${category}:${materialCue}:seed-preview`);
+
+  return buildArtboard({
+    palette,
+    category,
+    aspectRatio: "1:1",
+    variant: "thumbnail",
+    seed: materialSeed
+  });
 }
 
 export function createGeneratedImages({
