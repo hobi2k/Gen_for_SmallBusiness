@@ -1,0 +1,352 @@
+"""이미지 생성 도구 모듈"""
+
+from __future__ import annotations
+
+from functools import lru_cache
+from pathlib import Path
+
+from PIL import Image, ImageEnhance, ImageOps
+
+from backend.app.schemas.project import ProjectCreateRequest
+from backend.app.tools.runtime_support import (
+    can_use_cuda_models,
+    ensure_project_root,
+    get_model_dir,
+    is_model_downloaded,
+    render_marketing_card,
+)
+
+
+def _build_prompt(
+    payload: ProjectCreateRequest,
+    copy_bundle: dict[str, str | list[str]],
+    *,
+    variant_label: str,
+) -> str:
+    """
+    이미지 생성용 프롬프트를 한 문장으로 정리한다.
+
+    Args:
+        payload: 프로젝트 생성 요청 데이터
+        copy_bundle: 문구 생성 결과
+        variant_label: 생성 종류 설명
+
+    Returns:
+        정리된 프롬프트 문자열
+    """
+
+    keywords = ", ".join(payload.keywords[:5]) if payload.keywords else payload.category
+    selling_points = (
+        ", ".join(payload.selling_points[:3]) if payload.selling_points else payload.summary
+    )
+    headline = str(copy_bundle.get("headline", payload.product_name))
+    return (
+        f"{variant_label}, {payload.product_name}, {payload.category}, {payload.tone}, "
+        f"{headline}, {selling_points}, {keywords}, polished commercial visual"
+    )
+
+
+@lru_cache(maxsize=1)
+def _get_zimage_pipelines():
+    """
+    Z-Image-Turbo의 텍스트 생성과 이미지 편집 파이프라인을 함께 로드한다.
+
+    Returns:
+        텍스트 생성 파이프라인과 이미지 편집 파이프라인 튜플
+    """
+
+    import torch
+    from diffusers import ZImageImg2ImgPipeline, ZImagePipeline
+
+    model_dir = get_model_dir("z_image_turbo")
+    text_pipe = ZImagePipeline.from_pretrained(
+        str(model_dir),
+        torch_dtype=torch.bfloat16,
+    )
+    img2img_pipe = ZImageImg2ImgPipeline.from_pretrained(
+        str(model_dir),
+        torch_dtype=torch.bfloat16,
+    )
+    text_pipe.to("cuda")
+    img2img_pipe.to("cuda")
+    return text_pipe, img2img_pipe
+
+
+def _get_first_existing_input_image(payload: ProjectCreateRequest) -> Path | None:
+    """
+    사용자가 올린 이미지 중 실제로 존재하는 첫 파일을 찾는다.
+
+    Args:
+        payload: 프로젝트 생성 요청 데이터
+
+    Returns:
+        존재하는 첫 이미지 경로 또는 None
+    """
+
+    for image_path in payload.image_paths:
+        candidate = Path(image_path)
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _try_generate_with_zimage(
+    output_path: Path,
+    payload: ProjectCreateRequest,
+    copy_bundle: dict[str, str | list[str]],
+    *,
+    variant_label: str,
+    width: int,
+    height: int,
+) -> str | None:
+    """
+    Z-Image-Turbo 로컬 모델이 준비된 경우 실제 이미지를 생성한다.
+
+    Args:
+        output_path: 저장할 이미지 경로
+        payload: 프로젝트 생성 요청 데이터
+        copy_bundle: 문구 생성 결과
+        variant_label: 생성 종류 설명
+        width: 목표 너비
+        height: 목표 높이
+
+    Returns:
+        성공 시 저장 경로, 실패 시 None
+    """
+
+    if not can_use_cuda_models():
+        return None
+    if not is_model_downloaded("z_image_turbo"):
+        return None
+
+    try:
+        from diffusers.utils import load_image
+
+        text_pipe, img2img_pipe = _get_zimage_pipelines()
+        prompt = _build_prompt(payload, copy_bundle, variant_label=variant_label)
+        input_image = _get_first_existing_input_image(payload)
+
+        if input_image is not None:
+            result = img2img_pipe(
+                prompt=prompt,
+                image=load_image(str(input_image)).resize((width, height)),
+                strength=0.45,
+                num_inference_steps=8,
+                guidance_scale=3.5,
+            )
+        else:
+            result = text_pipe(
+                prompt=prompt,
+                width=width,
+                height=height,
+                num_inference_steps=8,
+                guidance_scale=3.5,
+            )
+
+        image = result.images[0]
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        image.save(output_path)
+        return str(output_path)
+    except Exception:
+        return None
+
+
+def _generate_fallback_image(
+    output_path: Path,
+    payload: ProjectCreateRequest,
+    copy_bundle: dict[str, str | list[str]],
+    *,
+    variant_label: str,
+    width: int,
+    height: int,
+) -> str:
+    """
+    로컬 대형 모델이 없을 때도 바로 쓸 수 있는 폴백 광고 이미지를 만든다.
+
+    Args:
+        output_path: 저장할 이미지 경로
+        payload: 프로젝트 생성 요청 데이터
+        copy_bundle: 문구 생성 결과
+        variant_label: 생성 종류 설명
+        width: 이미지 너비
+        height: 이미지 높이
+
+    Returns:
+        저장된 이미지 경로 문자열
+    """
+
+    input_image = _get_first_existing_input_image(payload)
+    if input_image is not None:
+        base = Image.open(input_image).convert("RGB")
+        base = ImageOps.contain(base, (width, height))
+        canvas = Image.new("RGB", (width, height), (250, 245, 239))
+        offset_x = (width - base.width) // 2
+        offset_y = (height - base.height) // 2
+        canvas.paste(base, (offset_x, offset_y))
+        canvas = ImageEnhance.Color(canvas).enhance(1.08)
+        canvas = ImageEnhance.Sharpness(canvas).enhance(1.12)
+        overlay_path = Path(
+            render_marketing_card(
+                output_path=output_path.with_name(f"{output_path.stem}_overlay.png"),
+                title=payload.product_name,
+                subtitle=f"{variant_label} | {payload.summary}",
+                badges=payload.selling_points[:2] + payload.keywords[:2],
+                width=width,
+                height=height,
+                tone=payload.tone,
+            ),
+        )
+        overlay = Image.open(overlay_path).convert("RGBA")
+        composed = Image.blend(canvas.convert("RGBA"), overlay, 0.26).convert("RGB")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        composed.save(output_path)
+        overlay_path.unlink(missing_ok=True)
+        return str(output_path)
+
+    badges = payload.selling_points[:2] + payload.keywords[:2]
+    if not badges:
+        badges = [payload.summary, payload.category]
+
+    return render_marketing_card(
+        output_path=output_path,
+        title=payload.product_name,
+        subtitle=f"{variant_label} | {payload.summary}",
+        badges=badges,
+        width=width,
+        height=height,
+        tone=payload.tone,
+    )
+
+
+def _generate_image(
+    output_path: Path,
+    payload: ProjectCreateRequest,
+    copy_bundle: dict[str, str | list[str]],
+    *,
+    variant_label: str,
+    width: int,
+    height: int,
+) -> str:
+    """
+    실제 모델 생성과 폴백 생성 중 가능한 경로를 골라 이미지를 만든다.
+
+    Args:
+        output_path: 저장할 이미지 경로
+        payload: 프로젝트 생성 요청 데이터
+        copy_bundle: 문구 생성 결과
+        variant_label: 생성 종류 설명
+        width: 이미지 너비
+        height: 이미지 높이
+
+    Returns:
+        저장된 이미지 경로 문자열
+    """
+
+    generated_path = _try_generate_with_zimage(
+        output_path=output_path,
+        payload=payload,
+        copy_bundle=copy_bundle,
+        variant_label=variant_label,
+        width=width,
+        height=height,
+    )
+    if generated_path is not None:
+        return generated_path
+
+    return _generate_fallback_image(
+        output_path=output_path,
+        payload=payload,
+        copy_bundle=copy_bundle,
+        variant_label=variant_label,
+        width=width,
+        height=height,
+    )
+
+
+def generate_banner_images(
+    project_id: str,
+    payload: ProjectCreateRequest,
+    copy_bundle: dict[str, str | list[str]],
+) -> list[str]:
+    """
+    배너 이미지 결과물 경로를 생성한다.
+
+    Args:
+        project_id: 프로젝트 식별자
+        payload: 프로젝트 생성 요청 데이터
+        copy_bundle: 문구 생성 결과
+
+    Returns:
+        배너 결과물 경로 목록
+    """
+
+    root = ensure_project_root(project_id)
+    return [
+        _generate_image(
+            root / f"banner_{index}.png",
+            payload,
+            copy_bundle,
+            variant_label=f"배너 시안 {index}",
+            width=1280,
+            height=720,
+        )
+        for index in range(1, 4)
+    ]
+
+
+def generate_detail_images(
+    project_id: str,
+    payload: ProjectCreateRequest,
+    copy_bundle: dict[str, str | list[str]],
+) -> list[str]:
+    """
+    상세 페이지 대표 이미지 결과물 경로를 생성한다.
+
+    Args:
+        project_id: 프로젝트 식별자
+        payload: 프로젝트 생성 요청 데이터
+        copy_bundle: 문구 생성 결과
+
+    Returns:
+        상세 이미지 결과물 경로 목록
+    """
+
+    root = ensure_project_root(project_id)
+    return [
+        _generate_image(
+            root / f"detail_{index}.png",
+            payload,
+            copy_bundle,
+            variant_label=f"상세 대표 이미지 {index}",
+            width=1280,
+            height=960,
+        )
+        for index in range(1, 3)
+    ]
+
+
+def generate_logo_drafts(project_id: str, payload: ProjectCreateRequest) -> list[str]:
+    """
+    로고 초안 결과물 경로를 생성한다.
+
+    Args:
+        project_id: 프로젝트 식별자
+        payload: 프로젝트 생성 요청 데이터
+
+    Returns:
+        로고 초안 경로 목록
+    """
+
+    root = ensure_project_root(project_id)
+    copy_bundle = {"headline": payload.product_name}
+    return [
+        _generate_image(
+            root / f"logo_{index}.png",
+            payload,
+            copy_bundle,
+            variant_label=f"로고 초안 {index}",
+            width=1024,
+            height=1024,
+        )
+        for index in range(1, 3)
+    ]
