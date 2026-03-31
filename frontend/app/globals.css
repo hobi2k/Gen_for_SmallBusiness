@@ -1,17 +1,52 @@
+@import '@fontsource/noto-sans-kr/400.css';
+@import '@fontsource/noto-sans-kr/500.css';
+@import '@fontsource/noto-sans-kr/700.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
 :root {
   color-scheme: light;
 }
 
+html {
+  min-height: 100%;
+}
+
 body {
   margin: 0;
-  background: linear-gradient(180deg, #f8f4ed 0%, #fffdf9 55%, #f1e5d7 100%);
+  min-height: 100%;
+  background:
+    radial-gradient(circle at top left, rgba(255, 194, 138, 0.28), transparent 24%),
+    radial-gradient(circle at top right, rgba(88, 166, 255, 0.14), transparent 22%),
+    linear-gradient(180deg, #f7f3ec 0%, #fffdf9 48%, #f2ede5 100%);
   color: #111111;
+  font-family: 'Noto Sans KR', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Segoe UI', sans-serif;
+}
+
+main {
+  width: 100%;
 }
 
 * {
   box-sizing: border-box;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+textarea,
+input,
+select,
+button {
+  font: inherit;
+}
+
+textarea:focus,
+input:focus,
+select:focus {
+  outline: 2px solid rgba(219, 106, 42, 0.18);
+  outline-offset: 0;
 }

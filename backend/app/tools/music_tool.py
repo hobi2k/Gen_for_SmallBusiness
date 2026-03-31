@@ -46,11 +46,35 @@ def _build_music_prompt(payload: ProjectCreateRequest) -> str:
     """
 
     keywords = ", ".join(payload.keywords[:4]) if payload.keywords else payload.category
-    return (
-        f"{payload.tone} 분위기의 광고 배경음악, "
-        f"{payload.product_name}, {payload.category}, {keywords}, "
-        f"{payload.video_duration_seconds}초, instrumental"
+    vocal_text = (
+        "instrumental only"
+        if payload.music_vocal_mode == "instrumental"
+        else "with vocals"
     )
+    return (
+        f"commercial music, {payload.tone}, {payload.product_name}, {payload.category}, "
+        f"{keywords}, {payload.video_duration_seconds} seconds, {vocal_text}, "
+        f"{payload.music_language}"
+    )
+
+
+def _build_lyrics(payload: ProjectCreateRequest, copy_bundle: dict[str, str | list[str]]) -> str:
+    """
+    실제 음악 생성에 사용할 가사를 정리한다.
+
+    Args:
+        payload: 프로젝트 생성 요청 데이터
+        copy_bundle: 문구 생성 결과
+
+    Returns:
+        가사 문자열
+    """
+
+    if payload.music_vocal_mode != "vocal":
+        return ""
+
+    lyrics = str(copy_bundle.get("music_lyrics", payload.music_lyrics)).strip()
+    return lyrics
 
 
 @lru_cache(maxsize=1)
@@ -76,6 +100,7 @@ def _try_generate_with_ace_step(
     project_root,
     payload: ProjectCreateRequest,
     music_prompt: str,
+    music_lyrics: str,
 ) -> str | None:
     """
     ACE-Step 로컬 모델이 준비된 경우 실제 배경 음악 생성을 시도한다.
@@ -102,20 +127,21 @@ def _try_generate_with_ace_step(
         # 공식 infer-api 예시의 호출 인자 순서를 그대로 따른다.
         # 지금 서비스는 짧은 광고용 배경음이 목적이므로 가사 없이 6초 음악으로 고정한다.
         model_demo(
+            "wav",  # format
             float(payload.video_duration_seconds),  # audio_duration
             prompt,
-            "",  # lyrics
+            music_lyrics,
             8,  # infer_step
             7.5,  # guidance_scale
             "euler",  # scheduler_type
             "apg",  # cfg_type
             10.0,  # omega_scale
-            "42",  # actual_seeds
+            [42],  # manual_seeds
             0.0,  # guidance_interval
             0.0,  # guidance_interval_decay
             5.0,  # min_guidance_scale
-            False,  # use_erg_tag
-            False,  # use_erg_lyric
+            True,  # use_erg_tag
+            bool(music_lyrics),  # use_erg_lyric
             False,  # use_erg_diffusion
             "",  # oss_steps
             0.0,  # guidance_scale_text
@@ -147,7 +173,13 @@ def generate_music(
 
     root = ensure_project_root(project_id)
     music_prompt = str(copy_bundle.get("music_prompt", _build_music_prompt(payload)))
-    generated_path = _try_generate_with_ace_step(root, payload, music_prompt)
+    music_lyrics = _build_lyrics(payload, copy_bundle)
+    generated_path = _try_generate_with_ace_step(
+        root,
+        payload,
+        music_prompt,
+        music_lyrics,
+    )
     if generated_path is not None:
         return generated_path
 

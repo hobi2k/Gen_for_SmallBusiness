@@ -24,6 +24,10 @@ class ProjectCreateRequest(BaseModel):
         description="광고 영상 길이(초)",
     )
     image_paths: list[str] = Field(default_factory=list, description="업로드된 이미지 경로")
+    include_music: bool = Field(default=True, description="영상에 음악을 포함할지 여부")
+    music_language: str = Field(default="ko", description="음악 가사 언어")
+    music_lyrics: str = Field(default="", description="음악 가사")
+    music_vocal_mode: str = Field(default="instrumental", description="음악 보컬 모드")
 
 
 class ProjectResponse(BaseModel):

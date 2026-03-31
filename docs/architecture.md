@@ -4,13 +4,27 @@
 - 프론트엔드: `frontend/`의 `Next.js` 앱
 - 백엔드: `backend/app/`의 `FastAPI` 앱
 - 데이터 저장: `SQLite`
-- 파일 저장: `storage/projects/`
+- 결과 저장: `~/Downloads/장사한컷`
+- 업로드 원본 저장: `~/Downloads/uploads`
 - 모델 저장: `models/`
 
-## 2. 생성 파이프라인
+## 2. 제품 구조
+
+### 2-1. 메인 화면
+- 채팅이 중심
+- 자연어 한 줄 요청만 받음
+- 입력 폼을 채팅에 붙이지 않음
+
+### 2-2. 전용 생성 화면
+- `/image`
+- `/video`
+- `/music`
+
+전용 생성 화면은 같은 공용 도구 계층을 더 정교하게 호출하기 위한 입력 화면입니다.
+
+## 3. 공용 생성 파이프라인
 1. `validate_input`
 2. `generate_copy`
-   - 광고 문구와 음악 생성용 프롬프트를 함께 정리
 3. `generate_banner_images`
 4. `generate_detail_images`
 5. `generate_logo_drafts`
@@ -20,52 +34,66 @@
 9. `compose_final_video`
 10. `persist_generation_result`
 
-## 3. 현재 구현 상태
+## 4. 진입점별 동작
 
-### 3-1. 문구
-- 현재는 안정적인 기본 문구 생성기로 동작
-- 이후 `OpenAI` 연결을 붙일 수 있게 구조 분리 완료
+### 채팅
+- `/chat/generate`
+- 자연어 요청
+- 이미지 / 영상 / 음악 의도 분기
+- 공용 생성 서비스 호출
 
-### 3-2. 이미지
+### 이미지 생성
+- `/generate/image`
+- `multipart/form-data`
+- 파일 업로드 지원
+
+### 영상 생성
+- `/generate/video`
+- `multipart/form-data`
+- 파일 업로드 지원
+- 음악 포함 여부 지원
+
+### 음악 생성
+- `/generate/music`
+- 입력만으로 생성
+- 업로드 없음
+
+## 5. 현재 모델 구성
+
+### 이미지
 - 목표 모델: `Tongyi-MAI/Z-Image-Turbo`
-- 현재 코드: 모델 디렉토리와 실제 파이프라인 로딩 경로 준비 완료
-- 실행 조건: `USE_LOCAL_AI_MODELS=true` 이고 CUDA 사용 가능해야 실제 모델 생성 경로 사용
-- 그 외 환경: 광고 카드 이미지를 직접 생성하는 폴백 경로 사용
-- 업로드 이미지가 있으면 `image-to-image`, 없으면 `text-to-image` 경로 사용
+- 업로드 이미지가 있으면 `image-to-image`
+- 업로드 이미지가 없으면 `text-to-image`
 
-### 3-3. 영상
+### 영상
 - 목표 모델: `Wan-AI/Wan2.2-TI2V-5B-Diffusers`
-- 이미지가 있으면 이미지 기반 경로
-- 이미지가 없으면 텍스트 기반 경로
-- 사용자가 `3~10초` 사이로 영상 길이를 직접 고른다
-- 현재 코드: 모델 로딩 경로 준비 완료
-- GPU가 없으면 대표 이미지를 6초 영상으로 바꾸는 폴백 경로 사용
+- 이미지가 있으면 이미지 기반
+- 이미지가 없으면 텍스트 기반
+- 길이는 `3~10초`
 
-### 3-4. 음악
+### 음악
 - 목표 모델: `ACE-Step/Ace-Step1.5`
-- 문구 생성 단계에서 광고 문맥을 음악 프롬프트로 정리해 전달
-- 음악 길이는 사용자가 고른 영상 길이에 맞춘다
-- 현재 코드: 실제 ACE-Step 호출 경로와 폴백 경로를 함께 둔다
+- 길이는 영상 길이에 맞춤
+- 보컬 모드 지원:
+  - `instrumental`
+  - `vocal`
+- `vocal`일 때만 가사와 언어 입력 사용
 
-### 3-5. 최종 합성
-- `ffmpeg`로 영상과 음악을 합쳐 `final_ad.mp4` 생성
-- 이 부분은 현재도 실제 합성이 동작함
+## 6. 폴백 경로
 
-## 4. 모델 디렉토리 구조
-- `models/z_image_turbo/`
-- `models/wan_ti2v/`
-- `models/ace_step/`
-- `models/meta/`
+### 이미지
+- 광고 카드 스타일 `png`
 
-## 5. 실행 조건
-- 기본 실행: GPU 없이 가능
-- 고급 로컬 모델 실행: `GCP VM + L4 GPU` 같은 CUDA 환경 필요
-- 환경 변수:
-  - `USE_LOCAL_AI_MODELS=false`: 기본값
-  - `USE_LOCAL_AI_MODELS=true`: 로컬 대형 모델 경로 활성화
+### 영상
+- 대표 이미지를 길이에 맞는 `mp4`로 변환
 
-## 6. 결과물 저장 방식
-프로젝트별 결과물은 아래처럼 묶여 저장된다.
+### 음악
+- `ffmpeg` 기반 `wav`
+
+### 합성
+- `ffmpeg`
+
+## 7. 저장 결과
 - `banner_*.png`
 - `detail_*.png`
 - `logo_*.png`
@@ -74,11 +102,16 @@
 - `final_ad.mp4`
 - `assets.json`
 
-## 7. 현재 확인된 동작
+영상 생성에서 음악을 끄면:
+- `music.wav`
+- `final_ad.mp4`
+는 생략됩니다.
+
+## 8. 현재 검증 상태
 - `pytest` 통과
 - `ruff check` 통과
-- `/projects` 호출 시 결과 파일 생성 확인
-- `/health` 응답 확인
+- `frontend npm run build` 통과
+- 실제 화면 스크린샷 확인 완료
 
-## 8. 추후 확장
-- `CosyVoice + Wan S2V` 기반 대본형 립싱크 영상은 현재 활성 범위 밖에 둔다.
+## 9. 범위 밖
+- `CosyVoice + Wan S2V` 립싱크 영상

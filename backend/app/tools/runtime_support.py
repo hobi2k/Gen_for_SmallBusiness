@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from functools import lru_cache
 from pathlib import Path
@@ -99,6 +100,33 @@ def ensure_project_root(project_id: str) -> Path:
     root = Path(settings.storage_root) / project_id
     root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+def save_uploaded_files(project_id: str, uploads: list[tuple[str, bytes]]) -> list[str]:
+    """
+    업로드된 파일 바이트를 프로젝트 전용 업로드 디렉토리에 저장한다.
+
+    Args:
+        project_id: 프로젝트 식별자
+        uploads: 파일 이름과 바이트 목록
+
+    Returns:
+        저장된 파일 경로 문자열 목록
+    """
+
+    upload_root = Path(settings.storage_root).parent / "uploads" / project_id
+    if upload_root.exists():
+        shutil.rmtree(upload_root)
+    upload_root.mkdir(parents=True, exist_ok=True)
+
+    saved_paths: list[str] = []
+    for index, (filename, content) in enumerate(uploads, start=1):
+        safe_name = filename or f"upload_{index}.bin"
+        target_path = upload_root / f"{index:02d}_{Path(safe_name).name}"
+        target_path.write_bytes(content)
+        saved_paths.append(str(target_path))
+
+    return saved_paths
 
 
 def pick_tone_colors(tone: str) -> tuple[tuple[int, int, int], tuple[int, int, int]]:

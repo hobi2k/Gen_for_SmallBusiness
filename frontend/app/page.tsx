@@ -1,65 +1,31 @@
-import {ProjectForm} from '@/components/project-form';
-import {SectionCard} from '@/components/section-card';
-import {archiveItems, generationSteps} from '@/lib/mock-data';
-
-const featureCards = [
-  {
-    title: '문구부터 배너까지 한 번에',
-    description: '상품 설명과 사진을 넣으면 광고 문구, 배너 이미지, 상세 페이지 대표 이미지를 한 번에 만듭니다.',
-  },
-  {
-    title: '이미지가 없어도 시작 가능',
-    description: '상품 사진이 없으면 텍스트만으로 먼저 초안을 만들고, 사진을 넣으면 결과물을 더 정확하게 다듬습니다.',
-  },
-  {
-    title: '짧은 광고 영상까지 연결',
-    description: '비주얼 중심 영상과 대본 중심 영상을 모두 준비할 수 있게 영상 생성 흐름을 분리합니다.',
-  },
-];
+import {ChatPanel} from '@/components/chat-panel';
+import {ModeCard} from '@/components/mode-card';
 
 export default function HomePage() {
   return (
-    <main className="min-h-screen px-6 py-10 md:px-10 xl:px-16">
-      <section className="mx-auto grid max-w-7xl gap-8 lg:grid-cols-[1.1fr_0.9fr]">
-        <div className="rounded-[40px] bg-[#1f130d] p-10 text-white shadow-2xl">
-          <p className="text-sm uppercase tracking-[0.3em] text-white/60">장사한컷</p>
-          <h1 className="mt-6 max-w-3xl text-4xl font-semibold leading-tight md:text-6xl">
-            소상공인을 위한 광고 콘텐츠 제작 플랫폼
-          </h1>
-          <p className="mt-6 max-w-2xl text-base leading-7 text-white/78">
-            문구, 배너, 상세 페이지 대표 이미지, 로고 초안, 짧은 광고 영상까지 한 흐름으로 만드는 생성 서비스입니다.
-          </p>
-          <div className="mt-10 grid gap-4 md:grid-cols-3">
-            {featureCards.map((card) => (
-              <SectionCard key={card.title} title={card.title} description={card.description} />
-            ))}
+    <main className="px-6 py-10 md:px-10 xl:px-16">
+      <section className="mx-auto max-w-7xl rounded-[40px] bg-[radial-gradient(circle_at_top_left,_rgba(255,179,107,0.22),_transparent_26%),linear-gradient(135deg,_#101826_0%,_#172334_58%,_#261a12_100%)] p-8 text-white shadow-[0_40px_140px_rgba(8,15,26,0.38)] md:p-10">
+        <div className="grid gap-8 lg:grid-cols-[1.3fr_0.7fr] lg:items-end">
+          <div>
+            <h1 className="max-w-5xl text-4xl font-semibold leading-[0.96] tracking-[-0.08em] text-white md:text-[5.2rem]">
+              배너, 광고 영상, 음악을 바로 만드는 생성 툴
+            </h1>
+            <p className="mt-6 max-w-3xl text-base leading-8 text-white/76">
+              메인 채팅에 원하는 결과만 적으면 바로 만들고, 더 세밀하게 조정할 때만 전용 생성 화면으로 들어갑니다.
+            </p>
+          </div>
+
+          <div className="grid gap-3">
+            <ModeCard href="/image" title="이미지 생성" description="배너, 상세 이미지, 로고 초안" />
+            <ModeCard href="/video" title="영상 생성" description="짧은 광고 영상과 선택형 음악" />
+            <ModeCard href="/music" title="음악 생성" description="배경 음악만 따로 빠르게 생성" />
           </div>
         </div>
-        <ProjectForm />
       </section>
 
-      <section className="mx-auto mt-10 grid max-w-7xl gap-6 lg:grid-cols-2">
-        <div className="rounded-[32px] border border-black/10 bg-white p-8 shadow-sm">
-          <h2 className="text-2xl font-semibold">생성 진행 화면</h2>
-          <div className="mt-6 space-y-3">
-            {generationSteps.map((step, index) => (
-              <div key={step} className="flex items-center justify-between rounded-2xl bg-mist px-4 py-3">
-                <span className="font-medium">{step}</span>
-                <span className="text-sm text-black/50">{index < 3 ? '완료' : index === 3 ? '진행 중' : '대기'}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-        <div className="rounded-[32px] border border-black/10 bg-white p-8 shadow-sm">
-          <h2 className="text-2xl font-semibold">최근 생성 프로젝트</h2>
-          <div className="mt-6 space-y-3">
-            {archiveItems.map((item) => (
-              <div key={item.title} className="rounded-2xl border border-black/10 px-4 py-4">
-                <p className="font-medium">{item.title}</p>
-                <p className="mt-2 text-sm text-black/55">상태: {item.status}</p>
-              </div>
-            ))}
-          </div>
+      <section className="mx-auto mt-8 max-w-7xl">
+        <div className="rounded-[40px] bg-white/82 p-3 shadow-[0_24px_80px_rgba(15,23,32,0.08)] backdrop-blur">
+          <ChatPanel />
         </div>
       </section>
     </main>

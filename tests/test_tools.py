@@ -45,7 +45,22 @@ def test_generate_copy_returns_video_script() -> None:
     copy_bundle = generate_copy(_make_payload())
     assert 'video_script' in copy_bundle
     assert 'music_prompt' in copy_bundle
-    assert '6초' in str(copy_bundle['music_prompt'])
+    assert '6 seconds' in str(copy_bundle['music_prompt'])
+
+
+def test_generate_copy_adds_lyrics_when_vocal_mode_is_enabled() -> None:
+    """
+    보컬 모드일 때 기본 가사가 생성되는지 확인한다.
+    """
+
+    payload = _make_payload().model_copy(
+        update={
+            'music_vocal_mode': 'vocal',
+            'music_language': 'ko',
+        }
+    )
+    copy_bundle = generate_copy(payload)
+    assert str(copy_bundle['music_lyrics']).strip()
 
 
 def test_select_key_visual_prefers_uploaded_image() -> None:

@@ -9,6 +9,11 @@ ALLOWED_TONES = {
     "고급스러운 브랜드형",
 }
 
+ALLOWED_VOCAL_MODES = {
+    "instrumental",
+    "vocal",
+}
+
 
 def validate_input(payload: ProjectCreateRequest) -> ProjectCreateRequest:
     """
@@ -32,5 +37,14 @@ def validate_input(payload: ProjectCreateRequest) -> ProjectCreateRequest:
 
     if payload.video_duration_seconds < 3 or payload.video_duration_seconds > 10:
         raise ValueError("영상 길이는 3초 이상 10초 이하만 가능합니다.")
+
+    if payload.music_vocal_mode not in ALLOWED_VOCAL_MODES:
+        raise ValueError("보컬 모드는 instrumental 또는 vocal만 가능합니다.")
+
+    if not payload.music_language.strip():
+        raise ValueError("음악 언어는 비어 있을 수 없습니다.")
+
+    if not payload.include_music and payload.music_vocal_mode == "vocal":
+        raise ValueError("음악을 끄면 보컬 모드는 사용할 수 없습니다.")
 
     return payload

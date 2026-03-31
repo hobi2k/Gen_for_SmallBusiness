@@ -16,7 +16,7 @@ source .venv/bin/activate
 uv pip install -e ".[ai]"
 ```
 
-## 3. 모델 디렉토리 만들기
+## 3. 모델 디렉토리 준비
 ```bash
 source .venv/bin/activate
 python scripts/initialize_models.py --create-only
@@ -51,19 +51,34 @@ ruff check backend tests scripts/initialize_models.py
 - `OPENAI_API_KEY`
 - `USE_LOCAL_AI_MODELS=false`
 
-## 9. 실행 해석 기준
-- `USE_LOCAL_AI_MODELS=false`
-  - GPU가 없어도 폴백 경로로 결과 파일 생성 가능
-- `USE_LOCAL_AI_MODELS=true`
-  - CUDA 가능 환경에서 로컬 대형 모델 경로 활성화
+## 9. 저장 위치
+- 생성 결과:
+  - `~/Downloads/장사한컷`
+- 업로드 원본:
+  - `~/Downloads/uploads`
 
-## 10. 생성 결과 확인 위치
-- `storage/projects/<project_id>/`
-- 생성 파일:
-  - `banner_*.png`
-  - `detail_*.png`
-  - `logo_*.png`
-  - `music.wav`
-  - `video_raw.mp4`
-  - `final_ad.mp4`
-  - `assets.json`
+## 10. 실행 해석 기준
+- `USE_LOCAL_AI_MODELS=false`
+  - GPU가 없어도 폴백 결과물 생성 가능
+- `USE_LOCAL_AI_MODELS=true`
+  - CUDA 환경에서 로컬 대형 모델 경로 활성화
+
+## 11. 현재 화면 구조
+- 메인:
+  - 채팅
+- 전용 생성:
+  - `/image`
+  - `/video`
+  - `/music`
+
+## 12. 입력 규칙
+- 채팅:
+  - 자연어 요청만 입력
+- 이미지 생성:
+  - 파일 업로드 지원
+- 영상 생성:
+  - 파일 업로드 지원
+  - 음악 포함 여부 선택 가능
+- 음악 생성:
+  - 업로드 없음
+  - 보컬일 때만 가사 언어 / 가사 사용
