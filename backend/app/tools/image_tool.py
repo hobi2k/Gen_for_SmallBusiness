@@ -261,6 +261,26 @@ def _get_nunchaku_img2img_pipeline():
     return pipe
 
 
+def release_image_pipelines() -> None:
+    """
+    캐시된 이미지 파이프라인을 해제하고 VRAM을 비운다.
+    영상·음악 모델을 로드하기 전에 호출한다.
+    """
+
+    import gc
+
+    _get_nunchaku_text_pipeline.cache_clear()
+    _get_nunchaku_img2img_pipeline.cache_clear()
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
 def _get_first_existing_input_image(payload: ProjectCreateRequest) -> Path | None:
     """
     사용자가 올린 이미지 중 실제로 존재하는 첫 파일을 찾는다.

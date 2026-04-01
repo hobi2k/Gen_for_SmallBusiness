@@ -65,6 +65,16 @@ def _patch_common_video_flow(monkeypatch, payload: ProjectCreateRequest) -> None
         "generate_short_video",
         lambda *args: "/tmp/video.mp4",
     )
+    monkeypatch.setattr(
+        generation_service,
+        "overlay_text_on_image",
+        lambda raw_path, output_path, payload, copy_bundle, asset_kind: output_path,
+    )
+    monkeypatch.setattr(
+        generation_service,
+        "overlay_text_on_video",
+        lambda project_id, source_path, payload, copy_bundle: "/tmp/video_overlay.mp4",
+    )
 
 
 def test_generate_video_asset_bundle_skips_music_when_disabled(monkeypatch) -> None:
@@ -83,8 +93,8 @@ def test_generate_video_asset_bundle_skips_music_when_disabled(monkeypatch) -> N
 
     result = generation_service.generate_video_asset_bundle(payload)
 
-    assert result["hero_asset_path"] == "/tmp/upload.png"
-    assert result["video"] == "/tmp/video.mp4"
+    assert result["hero_asset_path"] == "/tmp/detail_final.png"
+    assert result["video"] == "/tmp/video_overlay.mp4"
     assert "music" not in result
     assert "final_video" not in result
 
@@ -101,7 +111,7 @@ def test_generate_video_asset_bundle_includes_music_when_enabled(monkeypatch) ->
 
     result = generation_service.generate_video_asset_bundle(payload)
 
-    assert result["hero_asset_path"] == "/tmp/upload.png"
+    assert result["hero_asset_path"] == "/tmp/detail_final.png"
     assert result["music"] == "/tmp/music.wav"
     assert result["final_video"] == "/tmp/final.mp4"
 
@@ -126,9 +136,14 @@ def test_generate_image_asset_bundle_returns_full_asset_groups(monkeypatch) -> N
         lambda *args: ["/tmp/detail.png"],
     )
     monkeypatch.setattr(generation_service, "generate_logo_drafts", lambda *args: ["/tmp/logo.png"])
+    monkeypatch.setattr(
+        generation_service,
+        "overlay_text_on_image",
+        lambda raw_path, output_path, payload, copy_bundle, asset_kind: output_path,
+    )
 
     result = generation_service.generate_image_asset_bundle(payload)
 
-    assert result["banners"] == ["/tmp/banner.png"]
-    assert result["details"] == ["/tmp/detail.png"]
+    assert result["banners"] == ["/tmp/banner_final.png"]
+    assert result["details"] == ["/tmp/detail_final.png"]
     assert result["logos"] == ["/tmp/logo.png"]

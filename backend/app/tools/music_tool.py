@@ -13,8 +13,6 @@ from backend.app.tools.runtime_support import (
     get_model_dir,
     get_model_repo_id,
     is_model_downloaded,
-    require_real_generation,
-    run_ffmpeg,
 )
 
 
@@ -29,40 +27,32 @@ def _find_ace_step_checkpoint_dir(model_dir: Path) -> Path:
         실제 체크포인트 스냅샷 경로
     """
 
+    required_dir_names = [
+        "music_dcae_f8c8",
+        "music_vocoder",
+        "ace_step_transformer",
+        "umt5-base",
+    ]
+
     repo_id = get_model_repo_id("ace_step")
-    repo_dir_name = f"models--{repo_id.replace('/', '--')}"
-    snapshot_candidates = sorted(model_dir.glob(f"{repo_dir_name}/snapshots/*"))
-    for candidate in snapshot_candidates:
-        required_dirs = [
-            candidate / "music_dcae_f8c8",
-            candidate / "music_vocoder",
-            candidate / "ace_step_transformer",
-            candidate / "umt5-base",
-        ]
+    preferred_repo_dir_name = f"models--{repo_id.replace('/', '--')}"
+    preferred_candidates = sorted(
+        model_dir.glob(f"{preferred_repo_dir_name}/snapshots/*"),
+    )
+    fallback_candidates = sorted(model_dir.glob("models--ACE-Step--*/snapshots/*"))
+    direct_candidates = [path for path in model_dir.iterdir() if path.is_dir()]
+
+    seen: set[Path] = set()
+    for candidate in [*preferred_candidates, *fallback_candidates, *direct_candidates]:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+
+        required_dirs = [candidate / name for name in required_dir_names]
         if all(path.exists() for path in required_dirs):
             return candidate
 
     raise FileNotFoundError(f"ACE-Step 체크포인트 스냅샷을 찾지 못했습니다: {model_dir}")
-
-
-def _pick_frequency(tone: str) -> int:
-    """
-    분위기 값에 따라 간단한 폴백 배경음 기본 주파수를 고른다.
-
-    Args:
-        tone: 사용자가 고른 분위기
-
-    Returns:
-        기본 주파수 값
-    """
-
-    table = {
-        "깔끔한 판매형": 392,
-        "따뜻한 공감형": 262,
-        "밝은 행사형": 523,
-        "고급스러운 브랜드형": 330,
-    }
-    return table.get(tone, 392)
 
 
 def _build_music_prompt(payload: ProjectCreateRequest) -> str:
@@ -242,10 +232,7 @@ def _try_generate_with_ace_step(
         _validate_music_duration(str(output_path), payload.video_duration_seconds)
         return str(output_path)
     except Exception as exc:
-        if require_real_generation():
-            raise RuntimeError("ACE-Step 음악 생성에 실패했습니다.") from exc
-        # ACE-Step 자체는 실제 모델 경로를 시도하되, 환경이 맞지 않으면 생성 전체를 막지 않는다.
-        return None
+        raise RuntimeError("ACE-Step 음악 생성에 실패했습니다.") from exc
 
 
 def generate_music(
@@ -274,28 +261,6 @@ def generate_music(
         music_prompt,
         music_lyrics,
     )
-    if generated_path is not None:
-        return generated_path
-
-    if require_real_generation():
-        raise RuntimeError("실제 음악 모델 생성이 되지 않아 폴백 없이 중단합니다.")
-
-    output_path = root / "music.wav"
-    frequency = _pick_frequency(payload.tone)
-
-    # GPU나 체크포인트가 없을 때도 전체 파이프라인이 멈추지 않도록
-    # 간단한 폴백 배경음을 실제 wav 파일로 생성한다.
-    run_ffmpeg(
-        [
-            "ffmpeg",
-            "-y",
-            "-f",
-            "lavfi",
-            "-i",
-            f"sine=frequency={frequency}:duration={payload.video_duration_seconds}:sample_rate=44100",
-            "-filter:a",
-            "volume=0.15",
-            str(output_path),
-        ],
-    )
-    return str(output_path)
+    if generated_path is None:
+        raise RuntimeError("실제 음악 모델 생성에 실패했습니다.")
+    return generated_path

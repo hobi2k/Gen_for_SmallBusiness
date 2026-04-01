@@ -221,16 +221,47 @@ def pick_tone_colors(tone: str) -> tuple[tuple[int, int, int], tuple[int, int, i
     return palette.get(tone, ((238, 238, 238), (148, 148, 148)))
 
 
-def load_korean_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+def get_korean_font_path() -> Path | None:
     """
-    한글이 깨지지 않도록 시스템 폰트를 우선 탐색해 로드한다.
-
-    Args:
-        size: 원하는 폰트 크기
+    한글 렌더링에 사용할 시스템 폰트 경로를 찾는다.
 
     Returns:
-        로드된 폰트 객체
+        찾은 폰트 경로 또는 None
     """
+
+    project_font_candidates = [
+        PROJECT_ROOT
+        / "frontend"
+        / "node_modules"
+        / "@fontsource"
+        / "noto-sans-kr"
+        / "files"
+        / "noto-sans-kr-korean-700-normal.woff2",
+        PROJECT_ROOT
+        / "frontend"
+        / "node_modules"
+        / "@fontsource"
+        / "noto-sans-kr"
+        / "files"
+        / "noto-sans-kr-korean-400-normal.woff2",
+        PROJECT_ROOT
+        / "frontend"
+        / "node_modules"
+        / "@fontsource"
+        / "noto-sans-kr"
+        / "files"
+        / "noto-sans-kr-korean-700-normal.woff",
+        PROJECT_ROOT
+        / "frontend"
+        / "node_modules"
+        / "@fontsource"
+        / "noto-sans-kr"
+        / "files"
+        / "noto-sans-kr-korean-400-normal.woff",
+    ]
+    for candidate in project_font_candidates:
+        if candidate.exists():
+            return candidate
 
     candidate_paths = [
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
@@ -243,7 +274,25 @@ def load_korean_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     for candidate in candidate_paths:
         font_path = Path(candidate)
         if font_path.exists():
-            return ImageFont.truetype(str(font_path), size=size)
+            return font_path
+
+    return None
+
+
+def load_korean_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    """
+    한글이 깨지지 않도록 시스템 폰트를 우선 탐색해 로드한다.
+
+    Args:
+        size: 원하는 폰트 크기
+
+    Returns:
+        로드된 폰트 객체
+    """
+
+    font_path = get_korean_font_path()
+    if font_path is not None:
+        return ImageFont.truetype(str(font_path), size=size)
 
     return ImageFont.load_default()
 

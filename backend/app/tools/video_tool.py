@@ -97,6 +97,26 @@ def _get_wan_i2v_pipeline():
     return pipe
 
 
+def release_video_pipelines() -> None:
+    """
+    캐시된 영상 파이프라인을 해제하고 VRAM을 비운다.
+    음악 모델을 로드하기 전에 호출한다.
+    """
+
+    import gc
+
+    _get_wan_t2v_pipeline.cache_clear()
+    _get_wan_i2v_pipeline.cache_clear()
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
 def _try_generate_with_wan(
     output_path: Path,
     payload: ProjectCreateRequest,

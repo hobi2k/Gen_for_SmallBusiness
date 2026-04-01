@@ -1,34 +1,89 @@
+import http from 'node:http';
+import https from 'node:https';
+import {Readable} from 'node:stream';
+
 const backendBaseUrl = process.env.BACKEND_BASE_URL ?? 'http://127.0.0.1:8013';
 
-export async function proxyJsonPost(request: Request, backendPath: string): Promise<Response> {
-  const body = await request.text();
-  const response = await fetch(`${backendBaseUrl}${backendPath}`, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body,
-    cache: 'no-store',
-  });
+function nodeRequest(
+  backendPath: string,
+  incomingHeaders: Record<string, string>,
+  bodyStream: ReadableStream | null,
+): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const url = new URL(`${backendBaseUrl}${backendPath}`);
+    const lib = url.protocol === 'https:' ? https : http;
 
-  return buildProxyResponse(response);
+    const req = lib.request(
+      {
+        hostname: url.hostname,
+        port: parseInt(url.port || (url.protocol === 'https:' ? '443' : '80')),
+        path: url.pathname + url.search,
+        method: 'POST',
+        headers: incomingHeaders,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
+        res.on('end', () => {
+          const body = Buffer.concat(chunks).toString('utf8');
+          const contentType = res.headers['content-type'] ?? 'application/json';
+          resolve(
+            new Response(body, {
+              status: res.statusCode ?? 500,
+              headers: {'Content-Type': contentType},
+            }),
+          );
+        });
+        res.on('error', reject);
+      },
+    );
+
+    req.on('error', reject);
+
+    if (bodyStream) {
+      Readable.fromWeb(bodyStream as Parameters<typeof Readable.fromWeb>[0]).pipe(req);
+    } else {
+      req.end();
+    }
+  });
 }
 
 export async function proxyFormPost(request: Request, backendPath: string): Promise<Response> {
-  const formData = await request.formData();
-  const response = await fetch(`${backendBaseUrl}${backendPath}`, {
-    method: 'POST',
-    body: formData,
-    cache: 'no-store',
-  });
+  try {
+    const headers: Record<string, string> = {};
+    const contentType = request.headers.get('content-type');
+    if (contentType) headers['content-type'] = contentType;
+    const contentLength = request.headers.get('content-length');
+    if (contentLength) headers['content-length'] = contentLength;
 
-  return buildProxyResponse(response);
+    return await nodeRequest(backendPath, headers, request.body);
+  } catch {
+    return new Response(JSON.stringify({detail: '백엔드 서버에 연결할 수 없습니다.'}), {
+      status: 502,
+      headers: {'Content-Type': 'application/json'},
+    });
+  }
 }
 
-async function buildProxyResponse(response: Response): Promise<Response> {
-  const contentType = response.headers.get('content-type') ?? 'application/json';
-  const body = await response.text();
-  return new Response(body, {
-    status: response.status,
-    headers: {'Content-Type': contentType},
-  });
-}
+export async function proxyJsonPost(request: Request, backendPath: string): Promise<Response> {
+  try {
+    const body = await request.text();
+    const bodyStream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(body));
+        controller.close();
+      },
+    });
 
+    return await nodeRequest(
+      backendPath,
+      {'Content-Type': 'application/json'},
+      bodyStream,
+    );
+  } catch {
+    return new Response(JSON.stringify({detail: '백엔드 서버에 연결할 수 없습니다.'}), {
+      status: 502,
+      headers: {'Content-Type': 'application/json'},
+    });
+  }
+}

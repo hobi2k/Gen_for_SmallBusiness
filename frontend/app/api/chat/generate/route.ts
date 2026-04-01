@@ -1,6 +1,5 @@
-import {proxyJsonPost} from '@/app/api/_lib/backend-proxy';
+import {proxyFormPost} from '@/app/api/_lib/backend-proxy';
 
 export async function POST(request: Request): Promise<Response> {
-  return proxyJsonPost(request, '/chat/generate');
+  return proxyFormPost(request, '/chat/generate');
 }
-
