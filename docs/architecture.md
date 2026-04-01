@@ -3,6 +3,7 @@
 ## 1. 전체 구조
 - 프론트엔드: `frontend/`의 `Next.js` 앱
 - 백엔드: `backend/app/`의 `FastAPI` 앱
+- 연결 방식: `Next.js app/api` 프록시가 중간에서 백엔드로 전달
 - 데이터 저장: `SQLite`
 - 결과 저장: `~/Downloads/장사한컷`
 - 업로드 원본 저장: `~/Downloads/uploads`
@@ -34,36 +35,61 @@
 9. `compose_final_video`
 10. `persist_generation_result`
 
+## 3-1. 금지 규칙
+- 사용자 요청 의도는 규칙 기반 분기로 판단하지 않습니다.
+- 채팅 요청은 LLM 에이전트가 실제 도구 호출로 처리합니다.
+- 생성 실패 시 폴백 이미지, 폴백 영상, 폴백 음악을 대신 만들지 않습니다.
+- 실제 모델 경로가 실패하면 그대로 실패를 반환합니다.
+
 ## 4. 진입점별 동작
 
 ### 채팅
-- `/chat/generate`
+- 프론트 요청: `/api/chat/generate`
+- Next.js 프록시: `frontend/app/api/chat/generate/route.ts`
+- 실제 백엔드: `/chat/generate`
 - 자연어 요청
-- 이미지 / 영상 / 음악 의도 분기
-- 공용 생성 서비스 호출
+- LangGraph가 채팅 상태를 관리
+- LLM이 `ask_for_more_info`, `generate_image`, `generate_video`, `generate_music` 중 하나를 직접 호출
+- 호출된 도구만 실제 생성 서비스로 연결
 
 ### 이미지 생성
-- `/generate/image`
+- 프론트 요청: `/api/generate/image`
+- Next.js 프록시: `frontend/app/api/generate/image/route.ts`
+- 실제 백엔드: `/generate/image`
 - `multipart/form-data`
 - 파일 업로드 지원
 
 ### 영상 생성
-- `/generate/video`
+- 프론트 요청: `/api/generate/video`
+- Next.js 프록시: `frontend/app/api/generate/video/route.ts`
+- 실제 백엔드: `/generate/video`
 - `multipart/form-data`
 - 파일 업로드 지원
 - 음악 포함 여부 지원
 
 ### 음악 생성
-- `/generate/music`
+- 프론트 요청: `/api/generate/music`
+- Next.js 프록시: `frontend/app/api/generate/music/route.ts`
+- 실제 백엔드: `/generate/music`
 - 입력만으로 생성
 - 업로드 없음
 
-## 5. 현재 모델 구성
+## 5. 프론트와 백엔드 연결 규칙
+- 브라우저는 FastAPI 주소를 직접 호출하지 않음
+- 프론트 컴포넌트는 상대경로만 호출
+  - `/api/chat/generate`
+  - `/api/generate/image`
+  - `/api/generate/video`
+  - `/api/generate/music`
+- Next.js 서버가 `BACKEND_BASE_URL`을 읽어 실제 FastAPI 주소로 프록시함
+
+## 6. 현재 모델 구성
 
 ### 이미지
-- 목표 모델: `Tongyi-MAI/Z-Image-Turbo`
+- 목표 모델: `nunchaku-ai/nunchaku-z-image-turbo`
 - 업로드 이미지가 있으면 `image-to-image`
 - 업로드 이미지가 없으면 `text-to-image`
+- 현재 `diffusers` 시그니처 차이는 런타임에서 보정
 
 ### 영상
 - 목표 모델: `Wan-AI/Wan2.2-TI2V-5B-Diffusers`
@@ -79,21 +105,12 @@
   - `vocal`
 - `vocal`일 때만 가사와 언어 입력 사용
 
-## 6. 폴백 경로
+## 7. 실패 처리
+- 모델이 실패하면 실패를 그대로 반환합니다.
+- 실패를 가리는 임시 결과물은 만들지 않습니다.
+- 합성 단계는 생성된 영상과 음악을 그대로 합치기만 하며, 길이를 자르거나 임시로 맞추지 않습니다.
 
-### 이미지
-- 광고 카드 스타일 `png`
-
-### 영상
-- 대표 이미지를 길이에 맞는 `mp4`로 변환
-
-### 음악
-- `ffmpeg` 기반 `wav`
-
-### 합성
-- `ffmpeg`
-
-## 7. 저장 결과
+## 8. 저장 결과
 - `banner_*.png`
 - `detail_*.png`
 - `logo_*.png`
@@ -107,11 +124,11 @@
 - `final_ad.mp4`
 는 생략됩니다.
 
-## 8. 현재 검증 상태
+## 9. 현재 검증 상태
 - `pytest` 통과
 - `ruff check` 통과
 - `frontend npm run build` 통과
-- 실제 화면 스크린샷 확인 완료
+- 실제 이미지, 영상, 음악, 합성본 생성 확인 완료
 
-## 9. 범위 밖
+## 10. 범위 밖
 - `CosyVoice + Wan S2V` 립싱크 영상

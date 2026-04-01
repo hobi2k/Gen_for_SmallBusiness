@@ -12,6 +12,7 @@ from backend.app.tools.runtime_support import (
     get_model_dir,
     is_model_downloaded,
     render_marketing_card,
+    require_real_generation,
     run_ffmpeg,
 )
 
@@ -43,9 +44,9 @@ def select_key_visual(
 
 
 @lru_cache(maxsize=1)
-def _get_wan_pipeline():
+def _get_wan_t2v_pipeline():
     """
-    Wan 영상 파이프라인을 한 번만 로드한다.
+    Wan 텍스트 기반 영상 파이프라인을 한 번만 로드한다.
 
     Returns:
         로드된 Wan 파이프라인
@@ -65,7 +66,34 @@ def _get_wan_pipeline():
         vae=vae,
         torch_dtype=torch.bfloat16,
     )
-    pipe.to("cuda")
+    pipe.enable_sequential_cpu_offload()
+    return pipe
+
+
+@lru_cache(maxsize=1)
+def _get_wan_i2v_pipeline():
+    """
+    Wan 이미지 기반 영상 파이프라인을 한 번만 로드한다.
+
+    Returns:
+        로드된 Wan 이미지 기반 파이프라인
+    """
+
+    import torch
+    from diffusers import AutoencoderKLWan, WanImageToVideoPipeline
+
+    model_dir = get_model_dir("wan_ti2v")
+    vae = AutoencoderKLWan.from_pretrained(
+        str(model_dir),
+        subfolder="vae",
+        torch_dtype=torch.float32,
+    )
+    pipe = WanImageToVideoPipeline.from_pretrained(
+        str(model_dir),
+        vae=vae,
+        torch_dtype=torch.bfloat16,
+    )
+    pipe.enable_sequential_cpu_offload()
     return pipe
 
 
@@ -96,7 +124,12 @@ def _try_generate_with_wan(
     try:
         from diffusers.utils import export_to_video, load_image
 
-        pipe = _get_wan_pipeline()
+        if key_visual_path:
+            pipe = _get_wan_i2v_pipeline()
+            source_image = load_image(key_visual_path).resize((832, 480))
+        else:
+            pipe = _get_wan_t2v_pipeline()
+            source_image = None
         prompt = str(copy_bundle["video_script"])
         negative_prompt = (
             "overexposed, static, blurry details, subtitle, low quality, jpeg artifacts, "
@@ -105,19 +138,21 @@ def _try_generate_with_wan(
         call_kwargs = {
             "prompt": prompt,
             "negative_prompt": negative_prompt,
-            "height": 704,
-            "width": 1280,
-            "num_frames": payload.video_duration_seconds * 24 + 1,
+            "height": 480,
+            "width": 832,
+            "num_frames": payload.video_duration_seconds * 8 + 1,
             "guidance_scale": 5.0,
-            "num_inference_steps": 50,
+            "num_inference_steps": 8,
         }
-        if key_visual_path:
-            call_kwargs["image"] = load_image(key_visual_path)
+        if source_image is not None:
+            call_kwargs["image"] = source_image
 
         output = pipe(**call_kwargs).frames[0]
-        export_to_video(output, str(output_path), fps=24)
+        export_to_video(output, str(output_path), fps=8)
         return str(output_path)
-    except Exception:
+    except Exception as exc:
+        if require_real_generation():
+            raise RuntimeError("Wan 영상 생성에 실패했습니다.") from exc
         return None
 
 
@@ -182,6 +217,9 @@ def generate_short_video(
     generated_path = _try_generate_with_wan(output_path, payload, key_visual_path, copy_bundle)
     if generated_path is not None:
         return generated_path
+
+    if require_real_generation():
+        raise RuntimeError("실제 영상 모델 생성이 되지 않아 폴백 없이 중단합니다.")
 
     visual_source = _ensure_visual_source(root, payload, key_visual_path, copy_bundle)
 

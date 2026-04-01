@@ -10,8 +10,6 @@ type GenerationFormProps = {
   mode: GenerationMode;
 };
 
-const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://127.0.0.1:8000';
-
 const toneOptions = ['깔끔한 판매형', '따뜻한 공감형', '밝은 행사형', '고급스러운 브랜드형'];
 const languageOptions = [
   {value: 'ko', label: '한국어'},
@@ -52,7 +50,7 @@ const contentMap: Record<
 export function GenerationForm({mode}: GenerationFormProps) {
   const [status, setStatus] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [includeMusic, setIncludeMusic] = useState(mode !== 'video');
+  const [includeMusic, setIncludeMusic] = useState(true);
   const [musicVocalMode, setMusicVocalMode] = useState<'instrumental' | 'vocal'>('instrumental');
   const [result, setResult] = useState<{
     message?: string;
@@ -105,7 +103,7 @@ export function GenerationForm({mode}: GenerationFormProps) {
     }
 
     try {
-      const response = await fetch(`${apiBaseUrl}${content.endpoint}`, {
+      const response = await fetch(`/api${content.endpoint}`, {
         method: 'POST',
         body: requestForm,
       });

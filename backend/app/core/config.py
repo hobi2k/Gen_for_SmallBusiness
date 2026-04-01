@@ -21,6 +21,26 @@ def _default_download_root() -> Path:
     return Path.home() / "Downloads" / "장사한컷"
 
 
+def _default_frontend_origins() -> list[str]:
+    """
+    개발 중 허용할 프론트엔드 Origin 목록을 만든다.
+
+    Returns:
+        허용 Origin 문자열 목록
+    """
+
+    return [
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:3013",
+        "http://127.0.0.1:3014",
+        "http://127.0.0.1:3110",
+        "http://localhost:3000",
+        "http://localhost:3013",
+        "http://localhost:3014",
+        "http://localhost:3110",
+    ]
+
+
 class Settings(BaseSettings):
     """
     애플리케이션 전역 설정을 보관한다.
@@ -33,6 +53,7 @@ class Settings(BaseSettings):
     model_root: str = str(Path(__file__).resolve().parents[3] / "models")
     openai_api_key: str | None = None
     use_local_ai_models: bool = False
+    frontend_origins: list[str] = _default_frontend_origins()
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

@@ -8,7 +8,7 @@ Bash는 터미널에서 명령을 실행하고 자동화 스크립트를 만드�
 pwd
 ls -la
 cd frontend
-mkdir -p models/z_image_turbo
+mkdir -p models/nunchaku_z_image_turbo
 ```
 
 ## 3. 파일 만들기
@@ -41,7 +41,7 @@ echo "시작"
 
 ## 7. 조건문
 ```bash
-if [ -d models/z_image_turbo ]; then
+if [ -d models/nunchaku_z_image_turbo ]; then
   echo "디렉토리 있음"
 fi
 ```

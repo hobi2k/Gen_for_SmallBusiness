@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from uuid import uuid4
 
+from backend.app.core.config import get_settings
 from backend.app.schemas.project import ProjectCreateRequest
 from backend.app.tools.composition_tool import compose_final_video
 from backend.app.tools.copy_tool import generate_copy
@@ -13,9 +15,10 @@ from backend.app.tools.image_tool import (
     generate_logo_drafts,
 )
 from backend.app.tools.music_tool import generate_music
-from backend.app.tools.runtime_support import ensure_project_root
 from backend.app.tools.validation_tool import validate_input
 from backend.app.tools.video_tool import generate_short_video, select_key_visual
+
+settings = get_settings()
 
 
 def create_validated_request(payload: ProjectCreateRequest) -> ProjectCreateRequest:
@@ -43,9 +46,9 @@ def generate_image_asset_bundle(payload: ProjectCreateRequest) -> dict[str, str 
         이미지 자산 경로 딕셔너리
     """
 
-    request = create_validated_request(payload)
+    request = payload
     project_id = f"image-{uuid4()}"
-    project_root = ensure_project_root(project_id)
+    project_root = Path(settings.storage_root) / project_id
     copy_bundle = generate_copy(request)
     banner_paths = generate_banner_images(project_id, request, copy_bundle)
     detail_paths = generate_detail_images(project_id, request, copy_bundle)
@@ -70,9 +73,9 @@ def generate_video_asset_bundle(payload: ProjectCreateRequest) -> dict[str, str 
         영상 자산 경로 딕셔너리
     """
 
-    request = create_validated_request(payload)
+    request = payload
     project_id = f"video-{uuid4()}"
-    project_root = ensure_project_root(project_id)
+    project_root = Path(settings.storage_root) / project_id
     copy_bundle = generate_copy(request)
     detail_paths = generate_detail_images(project_id, request, copy_bundle)
     banner_paths = generate_banner_images(project_id, request, copy_bundle)
@@ -109,9 +112,9 @@ def generate_music_asset_bundle(payload: ProjectCreateRequest) -> dict[str, str 
         음악 자산 경로 딕셔너리
     """
 
-    request = create_validated_request(payload)
+    request = payload
     project_id = f"music-{uuid4()}"
-    project_root = ensure_project_root(project_id)
+    project_root = Path(settings.storage_root) / project_id
     copy_bundle = generate_copy(request)
     music_path = generate_music(project_id, request, copy_bundle)
     return {

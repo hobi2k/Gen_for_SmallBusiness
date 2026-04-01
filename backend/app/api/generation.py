@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from backend.app.schemas.generation import GenerationResponse
 from backend.app.schemas.project import ProjectCreateRequest
 from backend.app.services.generation_service import (
+    create_validated_request,
     generate_image_asset_bundle,
     generate_music_asset_bundle,
     generate_video_asset_bundle,
@@ -50,7 +51,7 @@ async def _build_form_payload(
     music_language: str = Form("ko"),
     music_lyrics: str = Form(""),
     music_vocal_mode: str = Form("instrumental"),
-    images: list[UploadFile] = File(default_factory=list),
+    images: list[UploadFile] = File(default=[]),
 ) -> ProjectCreateRequest:
     """
     multipart/form-data 요청을 프로젝트 요청 객체로 바꾼다.
@@ -93,7 +94,7 @@ async def generate_image(
     """
 
     try:
-        asset_paths = generate_image_asset_bundle(payload)
+        asset_paths = generate_image_asset_bundle(create_validated_request(payload))
         return GenerationResponse(
             mode="image",
             message="배너와 상세 이미지, 로고 초안이 준비됐습니다.",
@@ -121,7 +122,7 @@ async def generate_video(
     """
 
     try:
-        asset_paths = generate_video_asset_bundle(payload)
+        asset_paths = generate_video_asset_bundle(create_validated_request(payload))
         return GenerationResponse(
             mode="video",
             message="짧은 광고 영상과 배경 음악, 최종 합성본이 준비됐습니다.",
@@ -149,7 +150,7 @@ async def generate_music(
     """
 
     try:
-        asset_paths = generate_music_asset_bundle(payload)
+        asset_paths = generate_music_asset_bundle(create_validated_request(payload))
         return GenerationResponse(
             mode="music",
             message="영상 길이에 맞춘 배경 음악이 준비됐습니다.",

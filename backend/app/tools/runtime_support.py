@@ -48,6 +48,24 @@ def get_model_dir(model_name: str) -> Path:
     raise KeyError(f"등록되지 않은 모델 이름입니다: {model_name}")
 
 
+def get_model_repo_id(model_name: str) -> str:
+    """
+    매니페스트에 등록된 모델 이름으로 repo_id를 찾는다.
+
+    Args:
+        model_name: 매니페스트에 적힌 모델 이름
+
+    Returns:
+        모델 repo_id 문자열
+    """
+
+    manifest = load_model_manifest()
+    for model in manifest["models"]:
+        if model["name"] == model_name:
+            return str(model["repo_id"])
+    raise KeyError(f"등록되지 않은 모델 이름입니다: {model_name}")
+
+
 def is_model_downloaded(model_name: str) -> bool:
     """
     모델 디렉토리가 실제 다운로드된 상태인지 간단히 확인한다.
@@ -86,6 +104,17 @@ def can_use_cuda_models() -> bool:
     return bool(torch.cuda.is_available())
 
 
+def require_real_generation() -> bool:
+    """
+    실제 로컬 모델 생성만 허용할지 여부를 반환한다.
+
+    Returns:
+        실제 로컬 모델 생성 강제 여부
+    """
+
+    return settings.use_local_ai_models
+
+
 def ensure_project_root(project_id: str) -> Path:
     """
     프로젝트별 저장 루트를 만들고 반환한다.
@@ -97,9 +126,23 @@ def ensure_project_root(project_id: str) -> Path:
         프로젝트 저장 루트 경로
     """
 
-    root = Path(settings.storage_root) / project_id
+    root = get_project_root(project_id)
     root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+def get_project_root(project_id: str) -> Path:
+    """
+    프로젝트 저장 루트 경로만 계산해 반환한다.
+
+    Args:
+        project_id: 프로젝트 식별자
+
+    Returns:
+        프로젝트 저장 루트 경로
+    """
+
+    return Path(settings.storage_root) / project_id
 
 
 def save_uploaded_files(project_id: str, uploads: list[tuple[str, bytes]]) -> list[str]:
@@ -129,6 +172,35 @@ def save_uploaded_files(project_id: str, uploads: list[tuple[str, bytes]]) -> li
     return saved_paths
 
 
+def get_media_duration(file_path: str) -> float:
+    """
+    ffprobe로 미디어 길이를 초 단위로 읽는다.
+
+    Args:
+        file_path: 길이를 읽을 파일 경로
+
+    Returns:
+        초 단위 길이
+    """
+
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            file_path,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return float(result.stdout.strip())
+
+
 def pick_tone_colors(tone: str) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
     """
     분위기 값에 따라 카드용 배경 색 조합을 반환한다.
@@ -142,9 +214,9 @@ def pick_tone_colors(tone: str) -> tuple[tuple[int, int, int], tuple[int, int, i
 
     palette = {
         "깔끔한 판매형": ((247, 238, 226), (214, 176, 125)),
-        "신뢰감 있는 설명형": ((233, 241, 247), (119, 157, 188)),
-        "감성 공감형": ((245, 228, 232), (208, 144, 160)),
-        "밝은 행사 홍보형": ((255, 242, 197), (240, 170, 83)),
+        "따뜻한 공감형": ((245, 228, 232), (208, 144, 160)),
+        "밝은 행사형": ((255, 242, 197), (240, 170, 83)),
+        "고급스러운 브랜드형": ((233, 241, 247), (119, 157, 188)),
     }
     return palette.get(tone, ((238, 238, 238), (148, 148, 148)))
 

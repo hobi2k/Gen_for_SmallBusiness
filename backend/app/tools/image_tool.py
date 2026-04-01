@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import inspect
 from functools import lru_cache
+from os import environ
 from pathlib import Path
 
 from PIL import Image, ImageEnhance, ImageOps
@@ -14,6 +16,7 @@ from backend.app.tools.runtime_support import (
     get_model_dir,
     is_model_downloaded,
     render_marketing_card,
+    require_real_generation,
 )
 
 
@@ -46,30 +49,216 @@ def _build_prompt(
     )
 
 
-@lru_cache(maxsize=1)
-def _get_zimage_pipelines():
+def _find_nunchaku_checkpoint(model_dir: Path, precision: str) -> Path:
     """
-    Z-Image-Turbo의 텍스트 생성과 이미지 편집 파이프라인을 함께 로드한다.
+    Nunchaku 양자화 Z-Image 체크포인트 파일을 찾는다.
+
+    Args:
+        model_dir: Nunchaku 모델 디렉토리
+        precision: 현재 GPU에 맞는 양자화 정밀도
 
     Returns:
-        텍스트 생성 파이프라인과 이미지 편집 파이프라인 튜플
+        사용할 safetensors 파일 경로
+    """
+
+    precision_order = [precision]
+    if precision != "int4":
+        precision_order.append("int4")
+    if precision != "fp4":
+        precision_order.append("fp4")
+
+    for preferred_precision in precision_order:
+        preferred_patterns = [
+            f"svdq-{preferred_precision}_r32-z-image-turbo.safetensors",
+            f"svdq-{preferred_precision}_r128-z-image-turbo.safetensors",
+            f"svdq-{preferred_precision}_r256-z-image-turbo.safetensors",
+        ]
+        for pattern in preferred_patterns:
+            candidate = model_dir / pattern
+            if candidate.exists():
+                return candidate
+
+        pattern = f"svdq-{preferred_precision}_r*-z-image-turbo.safetensors"
+        candidates = sorted(model_dir.glob(pattern))
+        if candidates:
+            return candidates[0]
+
+    raise FileNotFoundError(
+        f"Nunchaku Z-Image 체크포인트를 찾지 못했습니다: {model_dir}",
+    )
+
+
+def _get_zimage_base_source() -> str:
+    """
+    Nunchaku가 조립할 base Z-Image 소스를 반환한다.
+
+    Returns:
+        base Z-Image 모델 소스 문자열
+    """
+
+    return environ.get("Z_IMAGE_BASE_MODEL_SOURCE", "Tongyi-MAI/Z-Image-Turbo")
+
+
+def _get_nunchaku_precision_override() -> str | None:
+    """
+    Nunchaku precision 강제값을 반환한다.
+
+    Returns:
+        precision 강제값 또는 None
+    """
+
+    value = environ.get("NUNCHAKU_PRECISION_OVERRIDE")
+    if value in {"int4", "fp4"}:
+        return value
+    return None
+
+
+def _patch_nunchaku_runtime() -> None:
+    """
+    현재 diffusers 버전과 nunchaku 런타임의 시그니처 차이를 실행 시점에 보정한다.
+    """
+
+    from nunchaku import NunchakuZImageTransformer2DModel
+    from nunchaku.models.transformers import transformer_zimage as transformer_module
+
+    if not getattr(NunchakuZImageTransformer2DModel, "_genfor_precision_patch_applied", False):
+        original_from_pretrained = NunchakuZImageTransformer2DModel.from_pretrained.__func__
+
+        @classmethod
+        def patched_from_pretrained(cls, pretrained_model_name_or_path, **kwargs):
+            precision_override = kwargs.get("precision")
+            if precision_override is None:
+                return original_from_pretrained(cls, pretrained_model_name_or_path, **kwargs)
+
+            original_get_precision = transformer_module.get_precision
+
+            def patched_get_precision(*args, **inner_kwargs):
+                return original_get_precision(
+                    precision_override,
+                    pretrained_model_name_or_path=pretrained_model_name_or_path,
+                )
+
+            transformer_module.get_precision = patched_get_precision
+            try:
+                return original_from_pretrained(cls, pretrained_model_name_or_path, **kwargs)
+            finally:
+                transformer_module.get_precision = original_get_precision
+
+        NunchakuZImageTransformer2DModel.from_pretrained = patched_from_pretrained
+        NunchakuZImageTransformer2DModel._genfor_precision_patch_applied = True
+
+    current_signature = inspect.signature(NunchakuZImageTransformer2DModel.forward)
+    if "controlnet_block_samples" in current_signature.parameters:
+        return
+
+    def patched_forward(
+        self,
+        x,
+        t,
+        cap_feats,
+        return_dict: bool = True,
+        controlnet_block_samples=None,
+        siglip_feats=None,
+        image_noise_mask=None,
+        patch_size=2,
+        f_patch_size=1,
+    ):
+        rope_hook = transformer_module.NunchakuZImageRopeHook()
+        self.register_rope_hook(rope_hook)
+        try:
+            return super(NunchakuZImageTransformer2DModel, self).forward(
+                x,
+                t,
+                cap_feats,
+                return_dict=return_dict,
+                controlnet_block_samples=controlnet_block_samples,
+                siglip_feats=siglip_feats,
+                image_noise_mask=image_noise_mask,
+                patch_size=patch_size,
+                f_patch_size=f_patch_size,
+            )
+        finally:
+            self.unregister_rope_hook()
+            del rope_hook
+
+    NunchakuZImageTransformer2DModel.forward = patched_forward
+    NunchakuZImageTransformer2DModel._genfor_forward_patch_applied = True
+
+
+@lru_cache(maxsize=1)
+def _get_nunchaku_text_pipeline():
+    """
+    Nunchaku Z-Image 텍스트 생성 파이프라인을 로드한다.
+
+    Returns:
+        텍스트 생성 파이프라인
     """
 
     import torch
-    from diffusers import ZImageImg2ImgPipeline, ZImagePipeline
+    from diffusers import ZImagePipeline
+    from nunchaku import NunchakuZImageTransformer2DModel
+    from nunchaku.utils import get_precision, is_turing
 
-    model_dir = get_model_dir("z_image_turbo")
-    text_pipe = ZImagePipeline.from_pretrained(
-        str(model_dir),
-        torch_dtype=torch.bfloat16,
+    _patch_nunchaku_runtime()
+    model_dir = get_model_dir("nunchaku_z_image_turbo")
+    precision = get_precision()
+    dtype = torch.float16 if is_turing() else torch.bfloat16
+    checkpoint_path = _find_nunchaku_checkpoint(model_dir, precision)
+    precision_override = _get_nunchaku_precision_override()
+    transformer_kwargs = {"torch_dtype": dtype}
+    if precision_override is not None:
+        transformer_kwargs["precision"] = precision_override
+    transformer = NunchakuZImageTransformer2DModel.from_pretrained(
+        str(checkpoint_path),
+        **transformer_kwargs,
     )
-    img2img_pipe = ZImageImg2ImgPipeline.from_pretrained(
-        str(model_dir),
-        torch_dtype=torch.bfloat16,
+    pipe = ZImagePipeline.from_pretrained(
+        _get_zimage_base_source(),
+        transformer=transformer,
+        torch_dtype=dtype,
+        low_cpu_mem_usage=False,
     )
-    text_pipe.to("cuda")
-    img2img_pipe.to("cuda")
-    return text_pipe, img2img_pipe
+    pipe.enable_sequential_cpu_offload()
+    pipe.enable_attention_slicing()
+    return pipe
+
+
+@lru_cache(maxsize=1)
+def _get_nunchaku_img2img_pipeline():
+    """
+    Nunchaku Z-Image 이미지 편집 파이프라인을 로드한다.
+
+    Returns:
+        이미지 편집 파이프라인
+    """
+
+    import torch
+    from diffusers import ZImageImg2ImgPipeline
+    from nunchaku import NunchakuZImageTransformer2DModel
+    from nunchaku.utils import get_precision, is_turing
+
+    _patch_nunchaku_runtime()
+    model_dir = get_model_dir("nunchaku_z_image_turbo")
+    precision = get_precision()
+    dtype = torch.float16 if is_turing() else torch.bfloat16
+    checkpoint_path = _find_nunchaku_checkpoint(model_dir, precision)
+    precision_override = _get_nunchaku_precision_override()
+    transformer_kwargs = {"torch_dtype": dtype}
+    if precision_override is not None:
+        transformer_kwargs["precision"] = precision_override
+    transformer = NunchakuZImageTransformer2DModel.from_pretrained(
+        str(checkpoint_path),
+        **transformer_kwargs,
+    )
+    pipe = ZImageImg2ImgPipeline.from_pretrained(
+        _get_zimage_base_source(),
+        transformer=transformer,
+        torch_dtype=dtype,
+        low_cpu_mem_usage=False,
+    )
+    pipe.enable_sequential_cpu_offload()
+    pipe.enable_attention_slicing()
+    return pipe
 
 
 def _get_first_existing_input_image(payload: ProjectCreateRequest) -> Path | None:
@@ -90,7 +279,7 @@ def _get_first_existing_input_image(payload: ProjectCreateRequest) -> Path | Non
     return None
 
 
-def _try_generate_with_zimage(
+def _try_generate_with_nunchaku_zimage(
     output_path: Path,
     payload: ProjectCreateRequest,
     copy_bundle: dict[str, str | list[str]],
@@ -100,7 +289,7 @@ def _try_generate_with_zimage(
     height: int,
 ) -> str | None:
     """
-    Z-Image-Turbo 로컬 모델이 준비된 경우 실제 이미지를 생성한다.
+    Nunchaku Z-Image 로컬 모델이 준비된 경우 실제 이미지를 생성한다.
 
     Args:
         output_path: 저장할 이미지 경로
@@ -116,38 +305,41 @@ def _try_generate_with_zimage(
 
     if not can_use_cuda_models():
         return None
-    if not is_model_downloaded("z_image_turbo"):
+    if not is_model_downloaded("nunchaku_z_image_turbo"):
         return None
 
     try:
         from diffusers.utils import load_image
 
-        text_pipe, img2img_pipe = _get_zimage_pipelines()
         prompt = _build_prompt(payload, copy_bundle, variant_label=variant_label)
         input_image = _get_first_existing_input_image(payload)
 
         if input_image is not None:
+            img2img_pipe = _get_nunchaku_img2img_pipeline()
             result = img2img_pipe(
                 prompt=prompt,
                 image=load_image(str(input_image)).resize((width, height)),
                 strength=0.45,
                 num_inference_steps=8,
-                guidance_scale=3.5,
+                guidance_scale=0.0,
             )
         else:
+            text_pipe = _get_nunchaku_text_pipeline()
             result = text_pipe(
                 prompt=prompt,
                 width=width,
                 height=height,
                 num_inference_steps=8,
-                guidance_scale=3.5,
+                guidance_scale=0.0,
             )
 
         image = result.images[0]
         output_path.parent.mkdir(parents=True, exist_ok=True)
         image.save(output_path)
         return str(output_path)
-    except Exception:
+    except Exception as exc:
+        if require_real_generation():
+            raise RuntimeError("Nunchaku Z-Image 이미지 생성에 실패했습니다.") from exc
         return None
 
 
@@ -242,7 +434,7 @@ def _generate_image(
         저장된 이미지 경로 문자열
     """
 
-    generated_path = _try_generate_with_zimage(
+    generated_path = _try_generate_with_nunchaku_zimage(
         output_path=output_path,
         payload=payload,
         copy_bundle=copy_bundle,
@@ -252,6 +444,9 @@ def _generate_image(
     )
     if generated_path is not None:
         return generated_path
+
+    if require_real_generation():
+        raise RuntimeError("실제 이미지 모델 생성이 되지 않아 폴백 없이 중단합니다.")
 
     return _generate_fallback_image(
         output_path=output_path,

@@ -58,8 +58,12 @@ def run_project_generation(db: Session, payload: ProjectCreateRequest) -> Projec
             image_paths=validated_payload.image_paths,
         )
         video_path = generate_short_video(project.id, validated_payload, key_visual, copy_bundle)
-        music_path = generate_music(project.id, validated_payload, copy_bundle)
-        final_video_path = compose_final_video(project.id, video_path, music_path)
+        music_path = None
+        final_video_path = None
+
+        if validated_payload.include_music:
+            music_path = generate_music(project.id, validated_payload, copy_bundle)
+            final_video_path = compose_final_video(project.id, video_path, music_path)
 
         persist_generation_result(
             db=db,
@@ -72,8 +76,8 @@ def run_project_generation(db: Session, payload: ProjectCreateRequest) -> Projec
                 "details": detail_paths,
                 "logos": logo_paths,
                 "video": video_path,
-                "music": music_path,
-                "final_video": final_video_path,
+                **({"music": music_path} if music_path else {}),
+                **({"final_video": final_video_path} if final_video_path else {}),
             },
         )
         return project

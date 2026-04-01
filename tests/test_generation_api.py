@@ -89,6 +89,26 @@ def test_generate_video_returns_video_assets() -> None:
     assert "final_video" not in data["asset_paths"]
 
 
+def test_generate_video_includes_music_assets_when_enabled() -> None:
+    """
+    영상 전용 생성 API가 음악 포함 상태에서 합성 결과까지 반환하는지 확인한다.
+    """
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/generate/video",
+            data=_build_payload(),
+            files={"images": _build_upload_file()},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["mode"] == "video"
+    assert "video" in data["asset_paths"]
+    assert "music" in data["asset_paths"]
+    assert "final_video" in data["asset_paths"]
+
+
 def test_generate_music_returns_music_asset() -> None:
     """
     음악 전용 생성 API가 음악 자산을 반환하는지 확인한다.

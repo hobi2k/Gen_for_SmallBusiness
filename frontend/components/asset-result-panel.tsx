@@ -1,4 +1,5 @@
-type AssetValue = string | string[] | Record<string, string | string[]>;
+import {AssetPreviewGallery} from '@/components/asset-preview-gallery';
+import {flattenPreviewAssets, AssetValue} from '@/lib/assets';
 
 type AssetResultPanelProps = {
   title: string;
@@ -11,34 +12,11 @@ type AssetResultPanelProps = {
   } | null;
 };
 
-function renderValue(value: AssetValue) {
-  if (Array.isArray(value)) {
-    return (
-      <ul className="space-y-2">
-        {value.map((item) => (
-          <li key={item} className="break-all rounded-2xl bg-black/5 px-3 py-2 text-xs text-black/68">
-            {item}
-          </li>
-        ))}
-      </ul>
-    );
-  }
-
-  if (typeof value === 'object') {
-    return (
-      <pre className="overflow-auto whitespace-pre-wrap break-all rounded-2xl bg-black/5 p-3 text-xs leading-6 text-black/68">
-        {JSON.stringify(value, null, 2)}
-      </pre>
-    );
-  }
-
-  return <p className="break-all rounded-2xl bg-black/5 px-3 py-2 text-xs text-black/68">{value}</p>;
-}
-
 export function AssetResultPanel({title, description, status, result}: AssetResultPanelProps) {
+  const assets = flattenPreviewAssets(result?.asset_paths);
+
   return (
     <section className="rounded-[32px] border border-black/10 bg-white p-6 shadow-[0_24px_80px_rgba(15,23,32,0.08)]">
-      <p className="text-xs uppercase tracking-[0.24em] text-black/36">결과</p>
       <h2 className="mt-3 text-2xl font-semibold tracking-[-0.03em] text-[#101828]">{title}</h2>
       <p className="mt-3 text-sm leading-6 text-black/58">{description}</p>
 
@@ -62,16 +40,7 @@ export function AssetResultPanel({title, description, status, result}: AssetResu
             </div>
           ) : null}
 
-          {result.asset_paths ? (
-            <div className="space-y-3">
-              {Object.entries(result.asset_paths).map(([key, value]) => (
-                <div key={key} className="rounded-[24px] border border-black/10 p-4">
-                  <p className="text-sm font-medium capitalize text-black/75">{key}</p>
-                  <div className="mt-3">{renderValue(value)}</div>
-                </div>
-              ))}
-            </div>
-          ) : null}
+          <AssetPreviewGallery assets={assets} />
         </div>
       ) : null}
     </section>

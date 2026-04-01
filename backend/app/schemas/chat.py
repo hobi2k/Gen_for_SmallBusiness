@@ -29,7 +29,8 @@ class ChatGenerateResponse(BaseModel):
     채팅 기반 생성 응답을 표현한다.
     """
 
+    status: str = Field(default="completed", description="completed 또는 needs_input")
     intent: str
     assistant_message: str
-    project_root: str
-    asset_paths: dict[str, str | list[str] | dict[str, str | list[str]]]
+    project_root: str = ""
+    asset_paths: dict[str, str | list[str] | dict[str, str | list[str]]] = Field(default_factory=dict)

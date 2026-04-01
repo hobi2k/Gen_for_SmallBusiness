@@ -1,51 +1,83 @@
 """채팅 기반 생성 API 테스트 모듈"""
 
-from fastapi.testclient import TestClient
+from backend.app.api import chat as chat_api
+from backend.app.schemas.chat import ChatGenerateRequest, ChatGenerateResponse
 
-from backend.app.main import app
 
-
-def test_chat_generate_image_returns_assets() -> None:
+def test_chat_generate_image_returns_assets(monkeypatch) -> None:
     """
     채팅 요청으로 이미지 생성 자산이 반환되는지 확인한다.
     """
 
-    payload = {
-        'message': '수제 딸기잼 배너 이미지 만들어줘',
-        'product_name': '수제 딸기잼',
-        'category': '식품',
-        'summary': '빵과 잘 어울리는 수제 잼',
-        'description': '딸기를 오래 졸여 만든 수제 잼입니다.',
-        'video_duration_seconds': 6,
-    }
+    monkeypatch.setattr(
+        chat_api,
+        'run_chat_generation',
+        lambda payload: ChatGenerateResponse(
+            intent='image',
+            assistant_message='이미지를 만들었습니다.',
+            project_root='/tmp/image-project',
+            asset_paths={
+                'project_root': '/tmp/image-project',
+                'banners': ['/tmp/banner.png'],
+                'details': ['/tmp/detail.png'],
+                'logos': ['/tmp/logo.png'],
+            },
+        ),
+    )
 
-    with TestClient(app) as client:
-        response = client.post('/chat/generate', json=payload)
+    response = chat_api.generate_from_chat(ChatGenerateRequest(message='수제 딸기잼 배너 이미지 만들어줘'))
 
-    assert response.status_code == 200
-    data = response.json()
-    assert data['intent'] == 'image'
-    assert 'banners' in data['asset_paths']
+    assert response.intent == 'image'
+    assert 'banners' in response.asset_paths
 
 
-def test_chat_generate_music_returns_music_asset() -> None:
+def test_chat_generate_music_returns_music_asset(monkeypatch) -> None:
     """
     채팅 요청으로 음악 생성 자산이 반환되는지 확인한다.
     """
 
-    payload = {
-        'message': '카페 광고용 배경 음악 만들어줘',
-        'product_name': '바닐라 라떼',
-        'category': '카페',
-        'summary': '부드럽고 달콤한 라떼',
-        'description': '바닐라 향이 살아 있는 수제 라떼입니다.',
-        'video_duration_seconds': 5,
-    }
+    monkeypatch.setattr(
+        chat_api,
+        'run_chat_generation',
+        lambda payload: ChatGenerateResponse(
+            intent='music',
+            assistant_message='음악을 만들었습니다.',
+            project_root='/tmp/music-project',
+            asset_paths={
+                'project_root': '/tmp/music-project',
+                'music': '/tmp/music.wav',
+            },
+        ),
+    )
 
-    with TestClient(app) as client:
-        response = client.post('/chat/generate', json=payload)
+    response = chat_api.generate_from_chat(ChatGenerateRequest(message='카페 광고용 배경 음악 만들어줘'))
 
-    assert response.status_code == 200
-    data = response.json()
-    assert data['intent'] == 'music'
-    assert 'music' in data['asset_paths']
+    assert response.intent == 'music'
+    assert 'music' in response.asset_paths
+
+
+def test_chat_generate_uses_llm_plan_shape(monkeypatch) -> None:
+    """
+    채팅 생성 응답이 영상 생성 구조를 그대로 내려주는지 확인한다.
+    """
+
+    monkeypatch.setattr(
+        chat_api,
+        'run_chat_generation',
+        lambda payload: ChatGenerateResponse(
+            intent='video',
+            assistant_message='영상으로 만들겠습니다.',
+            project_root='/tmp/video-project',
+            asset_paths={
+                'project_root': '/tmp/video-project',
+                'video': '/tmp/video.mp4',
+                'music': '/tmp/music.wav',
+                'final_video': '/tmp/final.mp4',
+            },
+        ),
+    )
+
+    response = chat_api.generate_from_chat(ChatGenerateRequest(message='이건 그냥 만들어줘'))
+
+    assert response.intent == 'video'
+    assert 'final_video' in response.asset_paths

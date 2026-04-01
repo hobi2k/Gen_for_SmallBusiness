@@ -21,7 +21,8 @@ def compose_final_video(project_id: str, video_path: str, music_path: str) -> st
     root = ensure_project_root(project_id)
     output_path = root / "final_ad.mp4"
 
-    # 영상 길이에 맞춰 음악을 잘라 붙이고, 결과 파일 하나만 열어도 바로 확인 가능하게 만든다.
+    # 음악 길이는 생성 단계에서 영상 길이에 맞춰 맞춘다.
+    # 여기서는 자르지 않고 그대로 합쳐서 최종 파일만 만든다.
     run_ffmpeg(
         [
             "ffmpeg",
@@ -38,7 +39,6 @@ def compose_final_video(project_id: str, video_path: str, music_path: str) -> st
             "copy",
             "-c:a",
             "aac",
-            "-shortest",
             str(output_path),
         ],
     )

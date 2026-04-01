@@ -1,6 +1,7 @@
 """문구 생성 도구 모듈"""
 
 from backend.app.schemas.project import ProjectCreateRequest
+from backend.app.services import llm_agent_service
 
 
 def _build_default_lyrics(payload: ProjectCreateRequest) -> str:
@@ -76,26 +77,12 @@ def generate_copy(payload: ProjectCreateRequest) -> dict[str, str | list[str]]:
         메인 문구와 보조 문구가 담긴 딕셔너리
     """
 
-    # 실제 LLM 연결 전까지는 프런트와 백엔드 흐름을 검증하기 위한 안정적인 기본값을 돌려준다.
-    selling_point = payload.selling_points[0] if payload.selling_points else payload.summary
-    duration_text = f"{payload.video_duration_seconds}초"
-    music_lyrics = _build_default_lyrics(payload)
-    return {
-        "headline": f"{payload.product_name}, 지금 더 눈에 띄게 소개하세요",
-        "subheads": [
-            selling_point,
-            f"{payload.category} 고객이 바로 이해하는 짧은 문구",
-        ],
-        "detail_headline": f"{payload.product_name}의 매력을 첫 화면에서 바로 보여줍니다",
-        "short_social_copies": [
-            f"{payload.product_name} 한 장면으로 시선을 잡아보세요",
-            f"{payload.tone} 분위기로 바로 쓸 수 있는 광고 소재",
-        ],
-        "music_prompt": _build_music_prompt(payload),
-        "music_lyrics": music_lyrics,
-        "music_language": payload.music_language,
-        "music_vocal_mode": payload.music_vocal_mode,
-        "video_script": (
-            f"{payload.product_name}의 핵심 장점을 {duration_text} 안에 보여주는 광고 영상"
-        ),
-    }
+    copy_bundle = llm_agent_service.generate_copy_with_llm(payload)
+
+    if payload.music_vocal_mode == "vocal" and not copy_bundle.get("music_lyrics"):
+        copy_bundle["music_lyrics"] = _build_default_lyrics(payload)
+
+    if not copy_bundle.get("music_prompt"):
+        copy_bundle["music_prompt"] = _build_music_prompt(payload)
+
+    return copy_bundle
