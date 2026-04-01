@@ -292,6 +292,27 @@ img {
   object-fit: cover;
 }
 
+.reference-preview-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.reference-preview-chip {
+  overflow: hidden;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.reference-preview-chip img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 .style-chip-row,
 .action-row,
 .badge-row,
@@ -379,6 +400,25 @@ img {
   gap: 14px;
 }
 
+.pending-card {
+  align-content: start;
+}
+
+.pending-skeleton {
+  height: 168px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background:
+    linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.72) 0%,
+      rgba(248, 235, 218, 0.92) 50%,
+      rgba(255, 255, 255, 0.72) 100%
+    );
+  background-size: 200% 100%;
+  animation: pending-shimmer 1.4s linear infinite;
+}
+
 .image-result-card {
   align-content: start;
 }
@@ -433,6 +473,16 @@ img {
   border: 1px solid rgba(183, 83, 54, 0.22);
   background: rgba(255, 240, 235, 0.74);
   color: #8e432c;
+}
+
+@keyframes pending-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+
+  to {
+    background-position: -200% 0;
+  }
 }
 
 @media (max-width: 1024px) {

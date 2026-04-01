@@ -1,7 +1,7 @@
 import { GeneratedImage, GeneratedPackage } from "@/lib/types";
 
 interface GeneratedResultsPanelProps {
-  generatedPackage: GeneratedPackage;
+  generatedPackage: GeneratedPackage | null;
   copiedKey: string | null;
   generating: boolean;
   sectionId: string;
@@ -25,6 +25,19 @@ interface TextOutputCardProps {
 interface ImageResultCardProps {
   title: string;
   images: GeneratedImage[];
+}
+
+function PendingCard({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="copy-card result-card pending-card">
+      <div className="card-title-row">
+        <strong>{title}</strong>
+        <span className="meta-badge">준비 중</span>
+      </div>
+      <div className="pending-skeleton" aria-hidden="true" />
+      <p className="result-text">{description}</p>
+    </div>
+  );
 }
 
 function CopyButton({ copied, onClick }: CopyButtonProps) {
@@ -80,6 +93,56 @@ export function GeneratedResultsPanel({
   onRegenerate,
   onChangeStyle
 }: GeneratedResultsPanelProps) {
+  if (!generatedPackage) {
+    return (
+      <section className="panel" id={sectionId}>
+        <div className="panel-header">
+          <div>
+            <div className="step-badge">Step 5-6. 결과 생성 중</div>
+            <h2 className="panel-title">스마트스토어용 콘텐츠 패키지를 준비하고 있습니다.</h2>
+            <p className="panel-copy">
+              현재 선택한 스타일을 기준으로 대표 이미지, 라이프스타일 이미지, 상품 문구,
+              태그 후보를 생성 중입니다.
+            </p>
+          </div>
+        </div>
+
+        <div className="token-row">
+          <span className="meta-badge">{generating ? "콘텐츠 생성 중" : "결과 대기 중"}</span>
+          <span className="meta-badge">스마트스토어 최적화 문구 생성</span>
+          <span className="meta-badge">태그 후보 정리</span>
+        </div>
+
+        <div className="result-card-grid">
+          <PendingCard
+            title="대표 감성 이미지"
+            description="대표 컷 1~2개를 준비합니다. worker가 연결되면 실제 생성 이미지를, 아니면 placeholder 이미지를 반환합니다."
+          />
+          <PendingCard
+            title="라이프스타일 이미지"
+            description="생활 장면형 컷 1~2개를 준비합니다. 상품 정체성은 유지한 상태로 구성됩니다."
+          />
+          <PendingCard
+            title="상품 한 줄 소개"
+            description="감성 톤은 유지하되 상품과 직접 연결되는 짧은 문장으로 정리합니다."
+          />
+          <PendingCard
+            title="상세 설명"
+            description="소재, 형태, 사용 장면이 드러나는 스마트스토어용 설명으로 생성합니다."
+          />
+          <PendingCard
+            title="스마트스토어용 짧은 소개문구"
+            description="링크 공유와 검색설정 문구로도 무리 없는 짧고 직접적인 문장으로 맞춥니다."
+          />
+          <PendingCard
+            title="키워드 / 해시태그"
+            description="상품과 직접 관련된 태그 후보와 SNS 해시태그를 함께 정리합니다."
+          />
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className="panel" id={sectionId}>
       <div className="panel-header">
@@ -96,8 +159,12 @@ export function GeneratedResultsPanel({
       <div className="token-row">
         <span className="meta-badge">선택 스타일: {generatedPackage.selectedStyle.name}</span>
         <span className="meta-badge">LLM: {generatedPackage.generationMeta.llmModel}</span>
+        <span className="meta-badge">이미지 엔진: {generatedPackage.generationMeta.imageEngine}</span>
         <span className="meta-badge">
           fallback {generatedPackage.generationMeta.fallbackUsed ? "사용" : "미사용"}
+        </span>
+        <span className="meta-badge">
+          이미지 {generatedPackage.generationMeta.imageFallbackUsed ? "placeholder" : "worker"}
         </span>
       </div>
 
@@ -153,6 +220,13 @@ export function GeneratedResultsPanel({
             />
           </div>
         </div>
+      </div>
+
+      <div className="divider" />
+      <div className="token-row">
+        <span className="meta-badge">Page title / Meta description 대응형 짧은 문구</span>
+        <span className="meta-badge">상품 연관 태그 후보만 사용</span>
+        <span className="meta-badge">스타일링 팁 제외</span>
       </div>
 
       <div className="divider" />

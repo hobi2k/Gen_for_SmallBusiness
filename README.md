@@ -48,9 +48,14 @@
 ## 중요한 현재 상태
 
 문구 생성과 추천은 바로 동작합니다.  
-이미지 생성은 향후 `SDXL + ControlNet + IP-Adapter` 워커에 연결할 수 있도록 API와 프롬프트 구조를 잡아둔 상태이며, 현재 로컬 MVP에서는 deterministic placeholder 이미지를 반환합니다.
+이미지 생성은 이제 프로파일 기반 워커에 연결되는 구조입니다.
 
-즉, 이 저장소는 다음 단계로 확장 가능한 "실행 가능한 MVP 오케스트레이션 레이어"입니다.
+- `full`: `SDXL + ControlNet + IP-Adapter`, 원격 NVIDIA GPU 기준
+- `lite-mps`: `Stable Diffusion 1.5 + ControlNet + IP-Adapter`, Apple Silicon 로컬 확인용 경량 경로
+
+워커가 켜져 있지 않거나 모델이 준비되지 않은 경우에는 자동으로 deterministic placeholder 이미지로 fallback 됩니다.
+
+즉, 이 저장소는 "실행 가능한 MVP 오케스트레이션 레이어 + 실제 이미지 워커 연결 지점"까지 포함합니다.
 
 ## 고정 스타일 프리셋
 
@@ -115,6 +120,7 @@
 [Next.js App Router]
   -> /api/recommend-styles
      -> Product Analyzer
+     -> 업로드 원본 storage/uploads 저장
      -> Embedding / Heuristic Recommender
      -> Langfuse Trace
      -> Logger
@@ -127,11 +133,27 @@
      -> Prompt Builder
      -> LLM Orchestrator
      -> Image Orchestrator Adapter
+        -> IMAGE_WORKER_ENABLED=true 이면 worker 호출
+        -> worker 미응답 시 placeholder fallback
      -> Langfuse Trace
      -> Logger
 
 [Storage]
+  -> storage/uploads/*
+  -> storage/generated/*
   -> storage/logs/generation-events.jsonl
+
+[Python Image Worker]
+  -> FastAPI
+  -> profile=full
+     -> SDXL base
+     -> SDXL ControlNet (canny)
+     -> IP-Adapter
+  -> profile=lite-mps
+     -> Stable Diffusion 1.5
+     -> ControlNet (canny)
+     -> IP-Adapter
+  -> references/themes/* 스타일 레퍼런스 사용
 
 [Observability]
   -> Langfuse Cloud or Self-hosted Endpoint
@@ -163,6 +185,10 @@
 ├─ Dockerfile
 ├─ docs
 │  └─ mvp-blueprint.md
+├─ workers
+│  └─ image_worker
+│     ├─ app.py
+│     └─ Dockerfile
 ├─ instrumentation.node.ts
 ├─ instrumentation.ts
 ├─ lib
@@ -179,7 +205,9 @@
 │  └─ utils.ts
 ├─ docker-compose.yml
 ├─ storage
-│  └─ logs
+│  ├─ generated
+│  ├─ logs
+│  └─ uploads
 ├─ package.json
 ├─ next.config.ts
 └─ tsconfig.json
@@ -233,6 +261,8 @@
 - `hashtags`
 - `generationMeta`
 
+실제 이미지 생성이 켜져 있으면 `generationMeta.imageEngine`은 worker 엔진 이름을 반환하고, fallback 시에는 placeholder 엔진 이름을 반환합니다.
+
 더 자세한 요청/응답 예시는 `docs/mvp-blueprint.md`에 정리되어 있습니다.
 
 ## 로컬 실행
@@ -279,6 +309,36 @@ docker compose up --build
 
 이 compose 설정은 `standalone` 기반 프로덕션 실행을 기준으로 잡혀 있습니다. 로컬 개발 핫리로드는 기존처럼 `npm run dev`를 사용하는 편이 단순합니다.
 
+이미지 워커까지 같이 띄우려면:
+
+```bash
+docker compose --profile gpu up --build
+```
+
+그리고 `.env`에서 아래를 켭니다.
+
+```bash
+IMAGE_WORKER_ENABLED=true
+IMAGE_WORKER_URL=http://image-worker:8001
+```
+
+Apple Silicon 로컬 확인용으로는 Docker보다 직접 worker를 띄우는 편이 낫습니다. Docker Desktop 안에서는 `mps` 가속을 그대로 쓰지 못하기 때문입니다.
+
+M1 8GB 기준 권장 설정:
+
+```bash
+IMAGE_WORKER_ENABLED=true
+IMAGE_WORKER_PROFILE=lite-mps
+IMAGE_WORKER_DEVICE=mps
+IMAGE_WORKER_URL=http://127.0.0.1:8001
+IMAGE_WORKER_TIMEOUT_MS=240000
+uvicorn workers.image_worker.app:app --host 0.0.0.0 --port 8001
+```
+
+`lite-mps`는 로컬 미리보기용 경량 프로파일입니다. 속도와 품질은 원격 GPU의 `full` 프로파일보다 낮지만, 테마 레퍼런스를 반영한 실제 라이프스타일 이미지 확인에는 쓸 수 있게 설계했습니다.
+첫 실행은 공개 모델과 adapter weight 다운로드 때문에 수 분이 걸릴 수 있습니다.
+기본 모델 캐시는 저장소 내부의 `.cache/huggingface`를 사용합니다.
+
 운영 시 자주 조정하는 값:
 
 - `APP_PORT`
@@ -298,6 +358,15 @@ docker compose up --build
 - `LANGFUSE_BASE_URL`
 - `LANGFUSE_TRACING_ENVIRONMENT`
 - `LANGFUSE_RELEASE`
+- `IMAGE_WORKER_ENABLED`
+- `IMAGE_WORKER_URL`
+- `IMAGE_WORKER_TOKEN`
+- `IMAGE_WORKER_PROFILE`
+- `IMAGE_WORKER_DEVICE`
+- `IMAGE_MODEL_BASE`
+- `IMAGE_MODEL_CONTROLNET`
+- `IMAGE_MODEL_IP_ADAPTER_REPO`
+- `IMAGE_MODEL_IP_ADAPTER_WEIGHT`
 
 설정되면 아래 모델을 사용합니다.
 
@@ -309,6 +378,7 @@ docker compose up --build
 
 - 추천: 휴리스틱 기반
 - 문구 생성: 템플릿 기반
+- 이미지 생성: placeholder 기반
 
 Langfuse는 아래 조건일 때만 활성화됩니다.
 
@@ -348,8 +418,8 @@ Langfuse를 켜면 각 로그 레코드에 아래 추적 상관관계 필드도 
 
 실제 운영 단계에서 추가로 연결할 영역은 아래입니다.
 
-- GCP L4 GPU 기반 이미지 생성 워커
-- SDXL + ControlNet + IP-Adapter inference 서버
+- GCP L4 GPU에서 실제 모델 weight 사전 다운로드 및 캐시 운영
+- `full` 프로파일과 `lite-mps` 프로파일의 성능 튜닝
 - 업로드 원본 이미지 저장소
 - 결과 이미지 CDN 저장
 - Postgres 또는 BigQuery 기반 로그 적재
@@ -367,8 +437,11 @@ Langfuse를 켜면 각 로그 레코드에 아래 추적 상관관계 필드도 
 - `lib/style-recommender.ts`: 임베딩 + 휴리스틱 추천 로직
 - `lib/prompt-builder.ts`: 이미지/카피 프롬프트 생성
 - `lib/content-generator.ts`: GPT-5-mini / GPT-5-nano 기반 카피 생성
-- `lib/image-output.ts`: 현재 placeholder 이미지 출력, 이후 이미지 엔진 어댑터로 교체 가능
+- `lib/image-output.ts`: worker 호출 + placeholder fallback 이미지 어댑터
+- `lib/image-worker.ts`: Python worker HTTP 클라이언트
+- `lib/storage-assets.ts`: 업로드/생성 이미지 스토리지 유틸
 - `lib/logging.ts`: JSONL 로깅
+- `workers/image_worker/app.py`: 프로파일 기반 FastAPI 이미지 worker
 - `docs/mvp-blueprint.md`: 상세 설계 문서
 
 ## 검증 상태

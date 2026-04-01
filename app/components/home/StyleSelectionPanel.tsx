@@ -34,6 +34,15 @@ function RecommendationCard({
       <div className="recommendation-thumbnail">
         <img src={recommendation.thumbnailUrl} alt={`${recommendation.name} 예시 썸네일`} />
       </div>
+      {recommendation.referencePreviewUrls.length > 1 ? (
+        <div className="reference-preview-row" aria-hidden="true">
+          {recommendation.referencePreviewUrls.slice(0, 3).map((referenceUrl, index) => (
+            <div className="reference-preview-chip" key={`${recommendation.styleId}-${index}`}>
+              <img src={referenceUrl} alt="" />
+            </div>
+          ))}
+        </div>
+      ) : null}
       <div className="badge-row">
         <span className="style-chip is-active">추천 점수 {recommendation.score}</span>
       </div>

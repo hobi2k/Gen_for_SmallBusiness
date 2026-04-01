@@ -61,6 +61,10 @@ function releasePreviewUrl(url: string | null) {
 }
 
 function buildSeedAllStyles(seed: DevSeedPreview): StyleRecommendation[] {
+  if (seed.allStyles.length) {
+    return seed.allStyles;
+  }
+
   return seed.recommendations
     .concat(
       STYLE_LIST.filter(
@@ -78,6 +82,7 @@ function buildSeedAllStyles(seed: DevSeedPreview): StyleRecommendation[] {
         promptTemplate: style.promptTemplate,
         promptKeywords: style.promptKeywords,
         thumbnailUrl: seed.previewUrl,
+        referencePreviewUrls: [],
         scoreBreakdown: {
           embeddingScore: 0,
           baseHeuristic: 0,

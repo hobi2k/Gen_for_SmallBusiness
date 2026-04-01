@@ -1,10 +1,14 @@
+import "server-only";
+
 import { STYLE_PRESETS } from "@/lib/style-presets";
+import { requestImageWorkerGeneration } from "@/lib/image-worker";
 import {
   GeneratedImage,
   ProductAnalysis,
   ProductCategory,
   ProductColorCue,
   ProductMaterialCue,
+  PromptBundle,
   StyleId
 } from "@/lib/types";
 import { hashString, seededAspectRatios } from "@/lib/utils";
@@ -128,44 +132,7 @@ function buildPlaceholderUrl({
   });
 }
 
-export function createStyleThumbnailUrl({
-  styleId,
-  category
-}: {
-  styleId: StyleId;
-  category: ProductCategory;
-}): string {
-  return buildArtboard({
-    palette: STYLE_PRESETS[styleId].palette,
-    category,
-    aspectRatio: "4:5",
-    variant: "thumbnail",
-    seed: hashString(`${styleId}:${category}:thumb`)
-  });
-}
-
-export function createSeedPreviewUrl({
-  category,
-  colorCue,
-  materialCue
-}: {
-  category: ProductCategory;
-  colorCue: ProductColorCue;
-  materialCue: ProductMaterialCue;
-}): string {
-  const palette = previewPalette(colorCue);
-  const materialSeed = hashString(`${category}:${materialCue}:seed-preview`);
-
-  return buildArtboard({
-    palette,
-    category,
-    aspectRatio: "1:1",
-    variant: "thumbnail",
-    seed: materialSeed
-  });
-}
-
-export function createGeneratedImages({
+function createPlaceholderImages({
   styleId,
   product,
   regenerateCount
@@ -173,11 +140,7 @@ export function createGeneratedImages({
   styleId: StyleId;
   product: ProductAnalysis;
   regenerateCount: number;
-}): {
-  representativeImages: GeneratedImage[];
-  lifestyleImages: GeneratedImage[];
-  seedBase: number;
-} {
+}) {
   const seedBase = hashString(`${product.uploadToken}:${styleId}:${regenerateCount}`);
   const ratios = seededAspectRatios(seedBase);
 
@@ -218,6 +181,87 @@ export function createGeneratedImages({
   return {
     representativeImages,
     lifestyleImages,
-    seedBase
+    seedBase,
+    imageEngine: "sdxl-controlnet-ipadapter-placeholder",
+    imageFallbackUsed: true
   };
+}
+
+export function createStyleThumbnailUrl({
+  styleId,
+  category
+}: {
+  styleId: StyleId;
+  category: ProductCategory;
+}): string {
+  return buildArtboard({
+    palette: STYLE_PRESETS[styleId].palette,
+    category,
+    aspectRatio: "4:5",
+    variant: "thumbnail",
+    seed: hashString(`${styleId}:${category}:thumb`)
+  });
+}
+
+export function createSeedPreviewUrl({
+  category,
+  colorCue,
+  materialCue
+}: {
+  category: ProductCategory;
+  colorCue: ProductColorCue;
+  materialCue: ProductMaterialCue;
+}): string {
+  const palette = previewPalette(colorCue);
+  const materialSeed = hashString(`${category}:${materialCue}:seed-preview`);
+
+  return buildArtboard({
+    palette,
+    category,
+    aspectRatio: "1:1",
+    variant: "thumbnail",
+    seed: materialSeed
+  });
+}
+
+export async function createGeneratedImages({
+  styleId,
+  product,
+  regenerateCount,
+  promptBundle
+}: {
+  styleId: StyleId;
+  product: ProductAnalysis;
+  regenerateCount: number;
+  promptBundle: PromptBundle;
+}): Promise<{
+  representativeImages: GeneratedImage[];
+  lifestyleImages: GeneratedImage[];
+  seedBase: number;
+  imageEngine: string;
+  imageFallbackUsed: boolean;
+}> {
+  const seedBase = hashString(`${product.uploadToken}:${styleId}:${regenerateCount}`);
+  const workerResult = await requestImageWorkerGeneration({
+    styleId,
+    product,
+    regenerateCount,
+    promptBundle
+  });
+
+  if (workerResult) {
+    return {
+      representativeImages: workerResult.representativeImages,
+      lifestyleImages: workerResult.lifestyleImages,
+      seedBase,
+      imageEngine: workerResult.imageEngine,
+      imageFallbackUsed: false
+    };
+  }
+
+  return createPlaceholderImages({
+    styleId,
+    product,
+    regenerateCount
+  });
 }

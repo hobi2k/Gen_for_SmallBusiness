@@ -1,4 +1,4 @@
-import { GeneratedCopy, ProductAnalysis, PromptBundle, StyleId, StylePreset } from "@/lib/types";
+import { GeneratedCopy, ProductAnalysis, ProductColorCue, PromptBundle, StyleId, StylePreset } from "@/lib/types";
 import { withLangfuseObservation } from "@/lib/langfuse";
 
 const REQUIRED_KEYS = [
@@ -9,56 +9,92 @@ const REQUIRED_KEYS = [
   "hashtags"
 ] as const;
 
+const MODEL_TIMEOUT_MS: Record<"gpt-5-mini" | "gpt-5-nano", number> = {
+  "gpt-5-mini": 3400,
+  "gpt-5-nano": 1800
+};
+
+const BANNED_KEYWORD_BASES = new Set([
+  "접시",
+  "볼",
+  "컵",
+  "유리잔",
+  "트레이",
+  "커트러리",
+  "리빙소품",
+  "스마트스토어",
+  "네이버",
+  "스토어",
+  "모던미니멀",
+  "내추럴우드",
+  "북유럽라이트톤",
+  "프렌치빈티지",
+  "코지홈카페",
+  "일본식담백한식탁"
+]);
+
+const COLOR_LABELS: Record<ProductColorCue, string> = {
+  white: "화이트",
+  ivory: "아이보리",
+  cream: "크림",
+  beige: "베이지",
+  brown: "브라운",
+  gray: "그레이",
+  black: "블랙",
+  clear: "투명",
+  blue: "블루",
+  green: "그린",
+  pink: "핑크",
+  earthy: "어스톤",
+  "low-saturation": "저채도",
+  neutral: "뉴트럴",
+  unknown: "담백한"
+};
+
 const STYLE_TONE_COPY: Record<
   StyleId,
   {
-    oneLineIntro: string;
-    descriptionLead: string;
-    storeCopy: string;
-    keywords: string[];
+    introPattern: string[];
+    detailMood: string;
+    storeMood: string;
+    featureKeywords: string[];
   }
 > = {
   "modern-minimal": {
-    oneLineIntro: "여백을 정리하듯 놓이는 단정한 한 점.",
-    descriptionLead:
-      "군더더기 없이 정리된 화면에서 제품의 실루엣과 질감을 가장 선명하게 보여주는 방향으로 구성했습니다.",
-    storeCopy: "정돈된 식탁 무드를 완성하는 미니멀 테이블웨어",
-    keywords: ["미니멀식탁", "화이트무드", "정돈된공간"]
+    introPattern: ["여백 위에서 더 또렷한", "정돈된 식탁에 자연스럽게 놓이는"],
+    detailMood: "불필요한 장식을 덜고 제품의 실루엣과 표면 인상을 또렷하게 전달합니다.",
+    storeMood: "간결한 상품 정보가 먼저 읽히는 스마트스토어용 문구",
+    featureKeywords: ["미니멀테이블웨어", "정돈된식탁", "화이트무드"]
   },
   "natural-wood": {
-    oneLineIntro: "원목 식탁에 편안하게 스며드는 따뜻한 한 점.",
-    descriptionLead:
-      "따뜻한 자연광과 우드 결감을 중심에 두어 손이 자주 가는 생활감 있는 인상을 만들었습니다.",
-    storeCopy: "원목 식탁에 자연스럽게 어우러지는 데일리 테이블웨어",
-    keywords: ["우드테이블", "내추럴무드", "따뜻한식탁"]
+    introPattern: ["원목 식탁에 편안하게 스며드는", "따뜻한 일상 장면에 잘 어우러지는"],
+    detailMood: "따뜻한 우드 질감과 자연광을 떠올리게 하는 생활감 중심 표현으로 정리합니다.",
+    storeMood: "원목 식탁 무드와 잘 맞는 생활형 상품 문구",
+    featureKeywords: ["우드테이블무드", "내추럴식탁", "데일리테이블웨어"]
   },
   "nordic-light": {
-    oneLineIntro: "밝은 빛 아래 더 맑게 읽히는 라이트톤 테이블웨어.",
-    descriptionLead:
-      "공기감 있는 밝은 톤과 기능적인 구성을 살려 깨끗하고 산뜻한 인상을 강조했습니다.",
-    storeCopy: "밝고 깨끗한 라이트톤 식탁을 위한 감성 아이템",
-    keywords: ["북유럽무드", "라이트톤", "맑은식탁"]
+    introPattern: ["밝은 식탁 위에서 더 맑게 보이는", "가벼운 공기감이 살아나는"],
+    detailMood: "깨끗한 라이트톤과 기능적인 인상을 강조해 가볍고 산뜻하게 전달합니다.",
+    storeMood: "맑고 깨끗한 인상을 우선하는 스마트스토어용 문구",
+    featureKeywords: ["라이트톤식탁", "밝은다이닝", "클린테이블웨어"]
   },
   "french-vintage": {
-    oneLineIntro: "우아한 식탁 무드를 은은하게 완성하는 클래식 포인트.",
-    descriptionLead:
-      "부드러운 패브릭과 앤티크한 분위기를 덧입혀 클래식하고 우아한 식탁 장면을 만들었습니다.",
-    storeCopy: "은은한 빈티지 감성을 더하는 클래식 테이블 포인트",
-    keywords: ["프렌치빈티지", "클래식무드", "우아한식탁"]
+    introPattern: ["은은한 우아함이 남는", "클래식한 식탁 무드를 살려주는"],
+    detailMood: "부드러운 패브릭과 앤티크 무드를 연상시키되 과장 없이 우아하게 정리합니다.",
+    storeMood: "우아한 분위기를 짧게 전달하는 스마트스토어용 문구",
+    featureKeywords: ["빈티지테이블웨어", "클래식식탁무드", "우아한디테일"]
   },
   "cozy-home-cafe": {
-    oneLineIntro: "홈카페 한켠을 포근하게 채우는 감성 포인트.",
-    descriptionLead:
-      "따뜻한 실내광과 커피 무드를 중심에 두어 일상 속 휴식 장면이 자연스럽게 떠오르도록 구성했습니다.",
-    storeCopy: "홈카페 무드를 더해주는 포근한 데일리 아이템",
-    keywords: ["홈카페무드", "따뜻한조명", "디저트감성"]
+    introPattern: ["홈카페 장면을 포근하게 채우는", "따뜻한 휴식 무드가 떠오르는"],
+    detailMood: "커피와 디저트가 어울리는 편안한 일상 장면을 중심으로 정리합니다.",
+    storeMood: "홈카페 전환율을 높이기 좋은 감성형 문구",
+    featureKeywords: ["홈카페무드", "포근한식탁", "디저트플레이팅"]
   },
   "japanese-simple-table": {
-    oneLineIntro: "담백한 식탁 위에 차분하게 놓이는 정갈한 한 점.",
-    descriptionLead:
-      "낮은 채도와 절제된 배치를 유지해 제품의 선과 비율이 차분하게 읽히도록 구성했습니다.",
-    storeCopy: "정갈한 식탁 무드에 어울리는 담백한 테이블웨어",
-    keywords: ["담백한식탁", "절제된무드", "정갈한상차림"]
+    introPattern: ["담백한 식탁에 차분하게 놓이는", "절제된 상차림과 잘 어울리는"],
+    detailMood: "낮은 채도와 정갈한 배치를 떠올리게 하는 차분한 어조로 정리합니다.",
+    storeMood: "정갈한 인상을 짧게 전달하는 스마트스토어용 문구",
+    featureKeywords: ["담백한식탁", "정갈한상차림", "절제된무드"]
   }
 };
 
@@ -106,35 +142,15 @@ function normalizePlainText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
-function normalizeKeywords(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return Array.from(
-    new Set(
-      value
-        .map((item) => normalizePlainText(String(item)).replaceAll("#", ""))
-        .filter(Boolean)
-        .slice(0, 5)
-    )
-  );
+function normalizeSmartToken(value: string): string {
+  return normalizePlainText(value).replaceAll("#", "").replace(/[^가-힣a-zA-Z0-9]/g, "");
 }
 
-function normalizeHashtags(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return Array.from(
-    new Set(
-      value
-        .map((item) => normalizePlainText(String(item)).replace(/\s+/g, ""))
-        .filter(Boolean)
-        .map((item) => (item.startsWith("#") ? item : `#${item}`))
-        .slice(0, 5)
-    )
-  );
+function clipText(value: string, maxLength: number): string {
+  const normalized = normalizePlainText(value);
+  return normalized.length <= maxLength
+    ? normalized
+    : `${normalized.slice(0, Math.max(0, maxLength - 3)).trim()}...`;
 }
 
 function sentenceCount(text: string): number {
@@ -144,20 +160,108 @@ function sentenceCount(text: string): number {
     .filter(Boolean).length;
 }
 
+function containsDisallowedSearchPattern(value: string): boolean {
+  return /[✨⭐💡🔥🎁✅]/u.test(value) || /(무료배송|당일출고|특가|세일|할인|1\+1)/.test(value);
+}
+
+function isAllowedKeyword(keyword: string): boolean {
+  const normalized = normalizeSmartToken(keyword);
+
+  if (!normalized || normalized.length < 4 || normalized.length > 14) {
+    return false;
+  }
+
+  return !BANNED_KEYWORD_BASES.has(normalized);
+}
+
+function normalizeKeywords(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const unique = new Set<string>();
+  const result: string[] = [];
+
+  for (const item of value) {
+    const normalized = normalizePlainText(String(item)).replaceAll("#", "");
+
+    if (!isAllowedKeyword(normalized)) {
+      continue;
+    }
+
+    const dedupeKey = normalizeSmartToken(normalized);
+
+    if (!dedupeKey || unique.has(dedupeKey)) {
+      continue;
+    }
+
+    unique.add(dedupeKey);
+    result.push(normalized);
+
+    if (result.length === 5) {
+      break;
+    }
+  }
+
+  return result;
+}
+
+function normalizeHashtags(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const unique = new Set<string>();
+  const result: string[] = [];
+
+  for (const item of value) {
+    const normalized = normalizeSmartToken(String(item));
+
+    if (!isAllowedKeyword(normalized)) {
+      continue;
+    }
+
+    if (unique.has(normalized)) {
+      continue;
+    }
+
+    unique.add(normalized);
+    result.push(`#${normalized}`);
+
+    if (result.length === 5) {
+      break;
+    }
+  }
+
+  return result;
+}
+
 function isValidOneLineIntro(value: string): boolean {
   const text = normalizePlainText(value);
-  return text.length >= 12 && text.length <= 38 && !text.includes("\n");
+  return text.length >= 16 && text.length <= 38 && !text.includes("\n") && !containsDisallowedSearchPattern(text);
 }
 
 function isValidDetailedDescription(value: string): boolean {
   const text = normalizePlainText(value);
   const count = sentenceCount(text);
-  return text.length >= 55 && text.length <= 260 && count >= 2 && count <= 4;
+  return (
+    text.length >= 80 &&
+    text.length <= 320 &&
+    count >= 2 &&
+    count <= 4 &&
+    !containsDisallowedSearchPattern(text)
+  );
 }
 
 function isValidShortStoreCopy(value: string): boolean {
   const text = normalizePlainText(value);
-  return text.length >= 16 && text.length <= 48 && !text.includes("\n");
+  return (
+    text.length >= 18 &&
+    text.length <= 42 &&
+    !text.includes("\n") &&
+    !text.includes("#") &&
+    !containsDisallowedSearchPattern(text)
+  );
 }
 
 function parseGeneratedCopy(rawText: string): GeneratedCopy | null {
@@ -197,7 +301,134 @@ function parseGeneratedCopy(rawText: string): GeneratedCopy | null {
   }
 }
 
-async function requestCopy(prompt: string, model: string): Promise<GeneratedCopy | null> {
+function primaryColor(product: ProductAnalysis): string {
+  return COLOR_LABELS[product.colorHints[0] ?? "unknown"];
+}
+
+function secondaryColor(product: ProductAnalysis): string {
+  return COLOR_LABELS[product.colorHints[1] ?? product.colorHints[0] ?? "unknown"];
+}
+
+function productHeadline(product: ProductAnalysis): string {
+  const color = primaryColor(product);
+  return clipText(`${color} ${product.categoryLabel}`, 14);
+}
+
+function materialNoun(product: ProductAnalysis): string {
+  const material = product.materialHints[0];
+
+  switch (material) {
+    case "ceramic":
+      return "세라믹";
+    case "glass":
+      return "유리";
+    case "wood":
+      return "우드";
+    case "metal":
+      return "메탈";
+    case "stone":
+      return "스톤";
+    case "linen":
+      return "린넨";
+    default:
+      return normalizePlainText(product.materialNotes.split(",")[0] ?? "테이블웨어");
+  }
+}
+
+function shapeCue(product: ProductAnalysis): string {
+  const summary = product.visualSummary;
+  const cues = ["얇은 림", "원형", "곡선", "손잡이", "광택", "무광", "투명감", "결감", "슬림한 라인"];
+
+  return cues.find((cue) => summary.includes(cue)) ?? clipText(summary, 28);
+}
+
+function buildKeywordCandidates(product: ProductAnalysis, style: StylePreset) {
+  const tonePack = STYLE_TONE_COPY[style.id];
+  const color = primaryColor(product);
+  const subColor = secondaryColor(product);
+  const material = materialNoun(product);
+  const shape = normalizeSmartToken(shapeCue(product));
+
+  return [
+    `${color}${material}`,
+    shape,
+    `${color}${product.categoryLabel}무드`,
+    `${subColor}${material}감성`,
+    ...tonePack.featureKeywords,
+    `${material}${product.categoryLabel}추천`,
+    `${product.categoryLabel}${style.name.replaceAll(" ", "")}`
+  ];
+}
+
+function buildSmartStoreKeywords(product: ProductAnalysis, style: StylePreset): string[] {
+  const unique = new Set<string>();
+  const result: string[] = [];
+
+  for (const candidate of buildKeywordCandidates(product, style)) {
+    const normalized = normalizePlainText(candidate);
+    const dedupeKey = normalizeSmartToken(normalized);
+
+    if (!isAllowedKeyword(normalized) || unique.has(dedupeKey)) {
+      continue;
+    }
+
+    unique.add(dedupeKey);
+    result.push(normalized);
+
+    if (result.length === 5) {
+      break;
+    }
+  }
+
+  return result;
+}
+
+function buildHashtagsFromKeywords(keywords: string[]): string[] {
+  return keywords.map((keyword) => `#${normalizeSmartToken(keyword)}`).slice(0, 5);
+}
+
+function buildOneLineIntro(style: StylePreset, product: ProductAnalysis): string {
+  const tonePack = STYLE_TONE_COPY[style.id];
+  const lead = tonePack.introPattern[0];
+  return clipText(`${lead} ${productHeadline(product)}`, 38);
+}
+
+function buildDetailedDescription(style: StylePreset, product: ProductAnalysis): string {
+  const tonePack = STYLE_TONE_COPY[style.id];
+  const color = primaryColor(product);
+  const material = materialNoun(product);
+  const shape = shapeCue(product);
+
+  return clipText(
+    [
+      `${product.categoryLabel} 특유의 ${shape}과 ${material} 표면감이 온라인 화면에서도 분명하게 보이도록 정리한 문구입니다.`,
+      `${color} 톤 인상과 ${style.name} 무드를 함께 살려 ${tonePack.detailMood}`,
+      `${tonePack.storeMood}로 활용하기 좋고, 상품과 직접 연결되는 표현만 남겨 스마트스토어 등록 문구로 쓰기 쉽게 구성했습니다.`
+    ].join(" "),
+    300
+  );
+}
+
+function buildShortStoreCopy(style: StylePreset, product: ProductAnalysis): string {
+  const material = materialNoun(product);
+  const shape = shapeCue(product);
+  return clipText(`${primaryColor(product)} ${material} ${product.categoryLabel}, ${shape}이 돋보이는 한 점`, 40);
+}
+
+function fallbackCopy(style: StylePreset, product: ProductAnalysis): GeneratedCopy {
+  const keywords = buildSmartStoreKeywords(product, style);
+  const hashtags = buildHashtagsFromKeywords(keywords);
+
+  return {
+    oneLineIntro: buildOneLineIntro(style, product),
+    detailedDescription: buildDetailedDescription(style, product),
+    shortStoreCopy: buildShortStoreCopy(style, product),
+    keywords,
+    hashtags
+  };
+}
+
+async function requestCopy(prompt: string, model: "gpt-5-mini" | "gpt-5-nano"): Promise<GeneratedCopy | null> {
   const apiKey = process.env.OPENAI_API_KEY;
 
   if (!apiKey) {
@@ -214,10 +445,13 @@ async function requestCopy(prompt: string, model: string): Promise<GeneratedCopy
       },
       model,
       metadata: {
-        pipeline: "sales-copy"
+        pipeline: "sales-copy",
+        contentProfile: "smartstore",
+        timeoutMs: MODEL_TIMEOUT_MS[model]
       },
       modelParameters: {
-        responseFormat: "json"
+        responseFormat: "json",
+        maxOutputTokens: 260
       },
       captureOutput: (copy) =>
         copy
@@ -230,10 +464,14 @@ async function requestCopy(prompt: string, model: string): Promise<GeneratedCopy
               parsed: false
             },
       captureErrorMetadata: () => ({
-        pipeline: "sales-copy"
+        pipeline: "sales-copy",
+        contentProfile: "smartstore"
       })
     },
     async () => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), MODEL_TIMEOUT_MS[model]);
+
       try {
         const response = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -243,13 +481,15 @@ async function requestCopy(prompt: string, model: string): Promise<GeneratedCopy
           },
           body: JSON.stringify({
             model,
+            max_output_tokens: 260,
             input: [
               {
                 role: "user",
                 content: [{ type: "input_text", text: prompt }]
               }
             ]
-          })
+          }),
+          signal: controller.signal
         });
 
         if (!response.ok) {
@@ -266,33 +506,11 @@ async function requestCopy(prompt: string, model: string): Promise<GeneratedCopy
         return parseGeneratedCopy(rawText);
       } catch {
         return null;
+      } finally {
+        clearTimeout(timeoutId);
       }
     }
   );
-}
-
-function fallbackCopy(style: StylePreset, product: ProductAnalysis): GeneratedCopy {
-  const tonePack = STYLE_TONE_COPY[style.id];
-  const keywords = [
-    product.categoryLabel,
-    style.name,
-    ...tonePack.keywords,
-    "리빙소품"
-  ].slice(0, 5);
-  const hashtags = keywords.map((keyword) => `#${keyword.replaceAll(" ", "")}`);
-  const detailedDescription = [
-    tonePack.descriptionLead,
-    `${product.visualSummary}을 중심으로 ${style.name} 특유의 ${style.colorTone} 톤을 반영해 온라인 화면에서도 분위기가 분명하게 읽히도록 설계했습니다.`,
-    `오프라인 매장의 감성을 온라인 판매 문구와 이미지 패키지로 자연스럽게 옮기기 좋은 구성입니다.`
-  ].join(" ");
-
-  return {
-    oneLineIntro: tonePack.oneLineIntro,
-    detailedDescription,
-    shortStoreCopy: tonePack.storeCopy,
-    keywords,
-    hashtags
-  };
 }
 
 export async function generateSalesCopy({
@@ -304,7 +522,7 @@ export async function generateSalesCopy({
   style: StylePreset;
   promptBundle: PromptBundle;
 }): Promise<{ copy: GeneratedCopy; modelUsed: string; fallbackUsed: boolean }> {
-  const models = ["gpt-5-mini", "gpt-5-nano"];
+  const models: Array<"gpt-5-mini" | "gpt-5-nano"> = ["gpt-5-mini", "gpt-5-nano"];
 
   for (const model of models) {
     const copy = await requestCopy(promptBundle.copyPrompt, model);
@@ -316,7 +534,7 @@ export async function generateSalesCopy({
 
   return {
     copy: fallbackCopy(style, product),
-    modelUsed: "template-fallback",
+    modelUsed: "smartstore-template-fallback",
     fallbackUsed: true
   };
 }

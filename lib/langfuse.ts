@@ -33,8 +33,10 @@ export interface ApiCommerceTraceContext {
   categoryLabel?: string | null;
   selectedStyleId?: string | null;
   selectedStyleName?: string | null;
+  imageEngine?: string | null;
   recommendationFallbackUsed?: boolean | null;
   contentFallbackUsed?: boolean | null;
+  imageFallbackUsed?: boolean | null;
   fallbackUsed?: boolean | null;
   regenerateCount?: number | null;
 }
@@ -175,11 +177,13 @@ export function buildApiRouteObservationMetadata(
       categoryLabel: context.categoryLabel ?? null,
       selectedStyleId: context.selectedStyleId ?? null,
       selectedStyleName: context.selectedStyleName ?? null,
+      imageEngine: context.imageEngine ?? null,
       regenerateCount: context.regenerateCount ?? null
     },
     fallback: {
       recommendationUsed: context.recommendationFallbackUsed ?? null,
       contentUsed: context.contentFallbackUsed ?? null,
+      imageFallbackUsed: context.imageFallbackUsed ?? null,
       overallUsed: context.fallbackUsed ?? null
     },
     ...extraMetadata
@@ -203,8 +207,10 @@ export function buildApiRouteTraceMetadata(
     category_label: context.categoryLabel ?? undefined,
     selected_style_id: context.selectedStyleId ?? undefined,
     selected_style_name: context.selectedStyleName ?? undefined,
+    image_engine: context.imageEngine ?? undefined,
     recommendation_fallback_used: context.recommendationFallbackUsed ?? undefined,
     content_fallback_used: context.contentFallbackUsed ?? undefined,
+    image_fallback_used: context.imageFallbackUsed ?? undefined,
     fallback_used: context.fallbackUsed ?? undefined,
     regenerate_count: context.regenerateCount ?? undefined,
     ...extraMetadata

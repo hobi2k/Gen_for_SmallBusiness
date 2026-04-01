@@ -8,6 +8,7 @@ import {
 } from "@/lib/langfuse";
 import { analyzeProductUpload } from "@/lib/product-analyzer";
 import { recommendStyles } from "@/lib/style-recommender";
+import { saveUploadedFile } from "@/lib/storage-assets";
 import { createUploadToken } from "@/lib/utils";
 
 export const runtime = "nodejs";
@@ -48,7 +49,14 @@ export async function POST(request: Request) {
       }
     },
     async () => {
-      const analysis = await analyzeProductUpload(uploaded);
+      const storedImage = await saveUploadedFile(uploaded, uploadToken);
+      const analysis = {
+        ...(await analyzeProductUpload(uploaded)),
+        uploadToken,
+        sourceImageSource: "storage" as const,
+        sourceImageRelativePath: storedImage.relativePath,
+        sourceImageUrl: storedImage.url
+      };
       const recommendationResult = await recommendStyles(analysis);
       const generatedAt = new Date().toISOString();
 

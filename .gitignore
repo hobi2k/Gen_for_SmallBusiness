@@ -3,10 +3,12 @@
 .env.*
 !.env.example
 .env.local
+.venv-image-worker
 .idea/
 .vscode/
 *.log
 node_modules
+.cache
 .npm-cache
 .next
 out
@@ -14,3 +16,7 @@ dist
 coverage
 tsconfig.tsbuildinfo
 storage/logs/*.jsonl
+storage/uploads/*
+!storage/uploads/.gitkeep
+storage/generated/*
+!storage/generated/.gitkeep

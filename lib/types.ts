@@ -34,6 +34,7 @@ export type ProductMaterialCue =
   | "mixed";
 
 export type ProductSurfaceTone = "warm" | "cool" | "neutral";
+export type ProductImageSource = "storage" | "references" | null;
 
 export type StyleId =
   | "modern-minimal"
@@ -50,6 +51,9 @@ export interface ProductAnalysis {
   fileName: string;
   mimeType: string;
   fileSize: number;
+  sourceImageSource: ProductImageSource;
+  sourceImageRelativePath: string | null;
+  sourceImageUrl: string | null;
   category: ProductCategory;
   categoryLabel: string;
   materialNotes: string;
@@ -95,6 +99,7 @@ export interface StyleRecommendation {
   promptTemplate: string;
   promptKeywords: string[];
   thumbnailUrl: string;
+  referencePreviewUrls: string[];
   scoreBreakdown: StyleScoreBreakdown;
 }
 
@@ -123,6 +128,7 @@ export interface GeneratedImage {
   aspectRatio: AspectRatio;
   url: string;
   seed: number;
+  storagePath?: string;
 }
 
 export interface GeneratedCopy {
@@ -142,8 +148,10 @@ export interface GeneratedPackage extends GeneratedCopy {
     uploadToken: string;
     seedBase: number;
     regenerateCount: number;
+    contentProfile: "smartstore";
     llmModel: string;
     imageEngine: string;
+    imageFallbackUsed: boolean;
     targetLatencyMs: number;
     recommendationFallbackUsed: boolean;
     contentFallbackUsed: boolean;
@@ -162,5 +170,18 @@ export interface DevSeed {
 
 export interface DevSeedPreview extends DevSeed {
   recommendations: StyleRecommendation[];
+  allStyles: StyleRecommendation[];
   fallbackUsed: boolean;
+}
+
+export interface ReferenceAsset {
+  id: string;
+  fileName: string;
+  relativePath: string;
+  url: string;
+}
+
+export interface ReferenceManifest {
+  productSamples: Record<ProductCategory, ReferenceAsset[]>;
+  themeSamples: Record<StyleId, ReferenceAsset[]>;
 }

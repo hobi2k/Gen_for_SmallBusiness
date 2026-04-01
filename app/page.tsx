@@ -49,7 +49,7 @@ export default function HomePage() {
           />
         ) : null}
 
-        {flow.generatedPackage ? (
+        {flow.generating || flow.generatedPackage ? (
           <GeneratedResultsPanel
             copiedKey={flow.copiedKey}
             generatedPackage={flow.generatedPackage}

@@ -16,7 +16,7 @@ import {
 } from "@/lib/logging";
 import { buildPromptBundle } from "@/lib/prompt-builder";
 import { STYLE_PRESETS } from "@/lib/style-presets";
-import { ProductAnalysis, StyleId, StyleRecommendation } from "@/lib/types";
+import { GeneratedPackage, ProductAnalysis, StyleId, StyleRecommendation } from "@/lib/types";
 
 export const runtime = "nodejs";
 
@@ -69,35 +69,43 @@ export async function POST(request: Request) {
     },
     async () => {
       const promptBundle = buildPromptBundle(style, analysis, regenerateCount);
-      const { copy, modelUsed, fallbackUsed: contentFallbackUsed } = await generateSalesCopy({
-        product: analysis,
-        style,
-        promptBundle
-      });
-      const { representativeImages, lifestyleImages, seedBase } = await withLangfuseObservation(
-        "image.package_adapter",
-        {
-          type: "tool",
-          input: {
-            styleId,
-            regenerateCount
-          },
-          metadata: {
-            engine: "sdxl-controlnet-ipadapter-placeholder"
-          },
-          captureOutput: (output) => ({
-            representativeCount: output.representativeImages.length,
-            lifestyleCount: output.lifestyleImages.length,
-            seedBase: output.seedBase
-          })
-        },
-        async () =>
-          createGeneratedImages({
-            styleId,
+      const [{ copy, modelUsed, fallbackUsed: contentFallbackUsed }, imagePackage] =
+        await Promise.all([
+          generateSalesCopy({
             product: analysis,
-            regenerateCount
-          })
-      );
+            style,
+            promptBundle
+          }),
+          withLangfuseObservation(
+            "image.package_adapter",
+            {
+              type: "tool",
+              input: {
+                styleId,
+                regenerateCount
+              },
+              metadata: {
+                engine: "sdxl-controlnet-ipadapter"
+              },
+              captureOutput: (output) => ({
+                representativeCount: output.representativeImages.length,
+                lifestyleCount: output.lifestyleImages.length,
+                seedBase: output.seedBase,
+                imageEngine: output.imageEngine,
+                imageFallbackUsed: output.imageFallbackUsed
+              })
+            },
+            async () =>
+              createGeneratedImages({
+                styleId,
+                product: analysis,
+                regenerateCount,
+                promptBundle
+              })
+          )
+        ]);
+      const { representativeImages, lifestyleImages, seedBase, imageEngine, imageFallbackUsed } =
+        imagePackage;
 
       const selectedStyle =
         body.recommendedStyles?.find((item) => item.styleId === style.id) ??
@@ -114,6 +122,7 @@ export async function POST(request: Request) {
           promptTemplate: style.promptTemplate,
           promptKeywords: style.promptKeywords,
           thumbnailUrl: "",
+          referencePreviewUrls: [],
           scoreBreakdown: {
             embeddingScore: 1,
             baseHeuristic: 1,
@@ -123,7 +132,7 @@ export async function POST(request: Request) {
           }
         } satisfies StyleRecommendation);
 
-      const result = {
+      const result: GeneratedPackage = {
         ...copy,
         representativeImages,
         lifestyleImages,
@@ -133,12 +142,14 @@ export async function POST(request: Request) {
           uploadToken: analysis.uploadToken,
           seedBase,
           regenerateCount,
+          contentProfile: "smartstore",
           llmModel: modelUsed,
-          imageEngine: "sdxl-controlnet-ipadapter",
+          imageEngine,
+          imageFallbackUsed,
           targetLatencyMs: 8000,
           recommendationFallbackUsed,
           contentFallbackUsed,
-          fallbackUsed: recommendationFallbackUsed || contentFallbackUsed,
+          fallbackUsed: recommendationFallbackUsed || contentFallbackUsed || imageFallbackUsed,
           generatedAt: new Date().toISOString()
         }
       };
@@ -146,6 +157,8 @@ export async function POST(request: Request) {
       syncActiveApiRouteContext(ROUTE, {
         ...baseRouteContext,
         contentFallbackUsed,
+        imageFallbackUsed,
+        imageEngine,
         fallbackUsed: result.generationMeta.fallbackUsed
       });
 
@@ -180,7 +193,9 @@ export async function POST(request: Request) {
           extra: {
             productSnapshot: analysis,
             regenerateCount,
-            llmModel: modelUsed
+            llmModel: modelUsed,
+            imageEngine,
+            imageFallbackUsed
           }
         })
       );

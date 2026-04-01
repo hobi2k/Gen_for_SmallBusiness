@@ -1,5 +1,6 @@
 import { createStyleThumbnailUrl } from "@/lib/image-output";
 import { withLangfuseObservation } from "@/lib/langfuse";
+import { getThemeReferencePreviewUrls, getThemeReferenceThumbnailUrl } from "@/lib/reference-library";
 import { STYLE_LIST, STYLE_PRESETS } from "@/lib/style-presets";
 import {
   ProductAnalysis,
@@ -318,6 +319,30 @@ export async function recommendStyles(product: ProductAnalysis): Promise<Recomme
   const productEmbeddings = await embedTexts([buildProductDescriptor(product)]);
   const productEmbedding = productEmbeddings?.[0];
   const fallbackUsed = !(productEmbedding && styleEmbeddings?.length);
+  const themeReferenceEntries = await Promise.all(
+    STYLE_LIST.map(async (style) => {
+      const [thumbnailUrl, referencePreviewUrls] = await Promise.all([
+        getThemeReferenceThumbnailUrl(style.id, product.category),
+        getThemeReferencePreviewUrls(style.id)
+      ]);
+
+      return [
+        style.id,
+        {
+          thumbnailUrl:
+            thumbnailUrl ?? createStyleThumbnailUrl({ styleId: style.id, category: product.category }),
+          referencePreviewUrls
+        }
+      ] as const;
+    })
+  );
+  const themeReferenceMap = Object.fromEntries(themeReferenceEntries) as Record<
+    StyleId,
+    {
+      thumbnailUrl: string;
+      referencePreviewUrls: string[];
+    }
+  >;
 
   const allStyles = STYLE_LIST.map((style, index) => {
     const baseHeuristic = BASE_CATEGORY_SCORES[style.id][product.category];
@@ -350,7 +375,8 @@ export async function recommendStyles(product: ProductAnalysis): Promise<Recomme
       colorTone: style.colorTone,
       promptTemplate: style.promptTemplate,
       promptKeywords: style.promptKeywords,
-      thumbnailUrl: createStyleThumbnailUrl({ styleId: style.id, category: product.category }),
+      thumbnailUrl: themeReferenceMap[style.id].thumbnailUrl,
+      referencePreviewUrls: themeReferenceMap[style.id].referencePreviewUrls,
       scoreBreakdown: {
         embeddingScore,
         baseHeuristic,

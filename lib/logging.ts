@@ -72,23 +72,34 @@ export function summarizeRecommendedStyles(recommendations: StyleRecommendation[
 
 export function summarizeGeneratedPackage(result: GeneratedPackage) {
   return {
-    representativeImages: result.representativeImages.map(({ id, kind, aspectRatio, seed }) => ({
-      id,
-      kind,
-      aspectRatio,
-      seed
-    })),
-    lifestyleImages: result.lifestyleImages.map(({ id, kind, aspectRatio, seed }) => ({
-      id,
-      kind,
-      aspectRatio,
-      seed
-    })),
+    representativeImages: result.representativeImages.map(
+      ({ id, kind, aspectRatio, seed, storagePath }) => ({
+        id,
+        kind,
+        aspectRatio,
+        seed,
+        storagePath: storagePath ?? null
+      })
+    ),
+    lifestyleImages: result.lifestyleImages.map(
+      ({ id, kind, aspectRatio, seed, storagePath }) => ({
+        id,
+        kind,
+        aspectRatio,
+        seed,
+        storagePath: storagePath ?? null
+      })
+    ),
+    representativeImagePaths: result.representativeImages.map(({ storagePath }) => storagePath ?? null),
+    lifestyleImagePaths: result.lifestyleImages.map(({ storagePath }) => storagePath ?? null),
+    imageEngine: result.generationMeta.imageEngine,
+    imageFallbackUsed: result.generationMeta.imageFallbackUsed,
     oneLineIntro: result.oneLineIntro,
     detailedDescription: result.detailedDescription,
     shortStoreCopy: result.shortStoreCopy,
     keywords: result.keywords,
-    hashtags: result.hashtags
+    hashtags: result.hashtags,
+    contentProfile: result.generationMeta.contentProfile
   };
 }
 
