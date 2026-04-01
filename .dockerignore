@@ -3,10 +3,13 @@
 .next
 .npm-cache
 .vscode
+.codex
 coverage
 dist
 node_modules
-storage/logs/*.jsonl
+references
+scripts
+storage
 .env
 .env.local
 .env.*

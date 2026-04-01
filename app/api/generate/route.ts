@@ -2,7 +2,12 @@ import { NextResponse } from "next/server";
 
 import { generateSalesCopy } from "@/lib/content-generator";
 import { createGeneratedImages } from "@/lib/image-output";
-import { withLangfuseObservation } from "@/lib/langfuse";
+import {
+  resolveLangfuseSessionId,
+  syncActiveApiRouteContext,
+  withApiRouteObservation,
+  withLangfuseObservation
+} from "@/lib/langfuse";
 import {
   buildStructuredLogPayload,
   logEvent,
@@ -14,6 +19,12 @@ import { STYLE_PRESETS } from "@/lib/style-presets";
 import { ProductAnalysis, StyleId, StyleRecommendation } from "@/lib/types";
 
 export const runtime = "nodejs";
+
+const ROUTE = {
+  name: "api.generate_package",
+  path: "/api/generate",
+  method: "POST"
+} as const;
 
 export async function POST(request: Request) {
   const body = (await request.json()) as {
@@ -32,9 +43,21 @@ export async function POST(request: Request) {
   const styleId = body.styleId;
   const analysis = body.analysis;
   const regenerateCount = body.regenerateCount ?? 0;
+  const style = STYLE_PRESETS[styleId];
+  const sessionId = resolveLangfuseSessionId(analysis.uploadToken);
+  const recommendationFallbackUsed = Boolean(body.recommendationFallbackUsed);
+  const baseRouteContext = {
+    uploadToken: analysis.uploadToken,
+    category: analysis.category,
+    categoryLabel: analysis.categoryLabel,
+    selectedStyleId: styleId,
+    selectedStyleName: style.name,
+    recommendationFallbackUsed,
+    regenerateCount
+  };
 
-  return withLangfuseObservation(
-    "api.generate_package",
+  return withApiRouteObservation(
+    ROUTE,
     {
       input: {
         uploadToken: analysis.uploadToken,
@@ -42,19 +65,9 @@ export async function POST(request: Request) {
         regenerateCount,
         category: analysis.category
       },
-      metadata: {
-        endpoint: "/api/generate"
-      },
-      captureOutput: (response) => ({
-        status: response.status
-      }),
-      captureErrorMetadata: () => ({
-        endpoint: "/api/generate",
-        uploadToken: analysis.uploadToken
-      })
+      context: baseRouteContext
     },
     async () => {
-      const style = STYLE_PRESETS[styleId];
       const promptBundle = buildPromptBundle(style, analysis, regenerateCount);
       const { copy, modelUsed, fallbackUsed: contentFallbackUsed } = await generateSalesCopy({
         product: analysis,
@@ -106,7 +119,7 @@ export async function POST(request: Request) {
             baseHeuristic: 1,
             rerankedScore: 1,
             rerankAdjustments: [],
-            fallbackUsed: Boolean(body.recommendationFallbackUsed)
+            fallbackUsed: recommendationFallbackUsed
           }
         } satisfies StyleRecommendation);
 
@@ -123,25 +136,46 @@ export async function POST(request: Request) {
           llmModel: modelUsed,
           imageEngine: "sdxl-controlnet-ipadapter",
           targetLatencyMs: 8000,
-          recommendationFallbackUsed: Boolean(body.recommendationFallbackUsed),
+          recommendationFallbackUsed,
           contentFallbackUsed,
-          fallbackUsed: Boolean(body.recommendationFallbackUsed) || contentFallbackUsed,
+          fallbackUsed: recommendationFallbackUsed || contentFallbackUsed,
           generatedAt: new Date().toISOString()
         }
       };
 
+      syncActiveApiRouteContext(ROUTE, {
+        ...baseRouteContext,
+        contentFallbackUsed,
+        fallbackUsed: result.generationMeta.fallbackUsed
+      });
+
       await logEvent(
         "package_generated",
         buildStructuredLogPayload({
-          uploadIdentifier: analysis.uploadToken,
+          route: ROUTE,
+          session: {
+            strategy: sessionId ? "uploadToken" : "unscoped-request",
+            uploadToken: sessionId ? analysis.uploadToken : null
+          },
+          category: {
+            value: analysis.category,
+            label: analysis.categoryLabel
+          },
           recommendedStyles: summarizeRecommendedStyles(body.recommendedStyles ?? []),
-          finalSelectedStyle: {
+          selectedStyle: {
             styleId: selectedStyle.styleId,
             styleName: selectedStyle.name
           },
           generationResult: summarizeGeneratedPackage(result),
-          isRegenerated: regenerateCount > 0,
-          fallbackUsed: result.generationMeta.fallbackUsed,
+          regeneration: {
+            count: regenerateCount,
+            isRegenerated: regenerateCount > 0
+          },
+          fallback: {
+            recommendationUsed: recommendationFallbackUsed,
+            contentUsed: contentFallbackUsed,
+            overallUsed: result.generationMeta.fallbackUsed
+          },
           generatedAt: result.generationMeta.generatedAt,
           extra: {
             productSnapshot: analysis,

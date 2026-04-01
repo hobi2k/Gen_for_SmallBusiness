@@ -4,6 +4,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    init: true
     ports:
       - "${APP_PORT:-3000}:3000"
     environment:
@@ -19,5 +20,13 @@ services:
       LANGFUSE_TRACING_ENVIRONMENT: ${LANGFUSE_TRACING_ENVIRONMENT:-local-docker}
       LANGFUSE_RELEASE: ${LANGFUSE_RELEASE:-docker-local}
     volumes:
-      - ./storage:/app/storage
-    restart: unless-stopped
+      - type: bind
+        source: ${APP_STORAGE_PATH:-./storage}
+        target: /app/storage
+    logging:
+      driver: json-file
+      options:
+        max-size: "${APP_LOG_MAX_SIZE:-10m}"
+        max-file: "${APP_LOG_MAX_FILE:-3}"
+    stop_grace_period: 20s
+    restart: ${APP_RESTART_POLICY:-unless-stopped}

@@ -271,10 +271,21 @@ npm run build
 
 ```bash
 cp .env.example .env
+docker compose config
 docker compose up --build
 ```
 
 기본 포트는 `3000`입니다.
+
+이 compose 설정은 `standalone` 기반 프로덕션 실행을 기준으로 잡혀 있습니다. 로컬 개발 핫리로드는 기존처럼 `npm run dev`를 사용하는 편이 단순합니다.
+
+운영 시 자주 조정하는 값:
+
+- `APP_PORT`
+- `APP_STORAGE_PATH`
+- `APP_RESTART_POLICY`
+- `APP_LOG_MAX_SIZE`
+- `APP_LOG_MAX_FILE`
 
 ## 환경 변수
 

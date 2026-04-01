@@ -1,6 +1,8 @@
 import { LangfuseSpanProcessor } from "@langfuse/otel";
 import { NodeSDK } from "@opentelemetry/sdk-node";
 
+import { LANGFUSE_SERVICE_NAME, isLangfuseTracingEnabled } from "@/lib/langfuse";
+
 const globalForLangfuse = globalThis as typeof globalThis & {
   __lifestyleShopLangfuseSdk?: NodeSDK;
   __lifestyleShopLangfuseHandlersRegistered?: boolean;
@@ -11,16 +13,6 @@ const SENSITIVE_KEY_FRAGMENT = ["authorization", "api_key", "apikey", "secret", 
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isLangfuseTracingConfigured() {
-  const enabledFlag = process.env.LANGFUSE_TRACING_ENABLED;
-
-  if (enabledFlag === "false" || enabledFlag === "0") {
-    return false;
-  }
-
-  return Boolean(process.env.LANGFUSE_PUBLIC_KEY && process.env.LANGFUSE_SECRET_KEY);
 }
 
 function shouldRedactKey(key: string) {
@@ -71,13 +63,13 @@ function registerShutdownHandlers() {
 }
 
 function initializeLangfuse() {
-  if (!isLangfuseTracingConfigured()) {
+  if (!isLangfuseTracingEnabled()) {
     return;
   }
 
   if (!globalForLangfuse.__lifestyleShopLangfuseSdk) {
     const sdk = new NodeSDK({
-      serviceName: "lifestyle-shop-ai-mvp",
+      serviceName: LANGFUSE_SERVICE_NAME,
       spanProcessors: [
         new LangfuseSpanProcessor({
           publicKey: process.env.LANGFUSE_PUBLIC_KEY,

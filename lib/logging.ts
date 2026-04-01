@@ -1,28 +1,62 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 
+import { context as otelContext } from "@opentelemetry/api";
+import { getPropagatedAttributesFromContext } from "@langfuse/core";
 import { getActiveSpanId, getActiveTraceId } from "@langfuse/tracing";
 
 import { GeneratedPackage, StyleRecommendation } from "@/lib/types";
 
 const LOG_DIRECTORY = path.join(process.cwd(), "storage", "logs");
 const LOG_FILE = path.join(LOG_DIRECTORY, "generation-events.jsonl");
+const TRACE_METADATA_PREFIX = "langfuse.trace.metadata.";
+
+interface LogRouteContext {
+  name: string;
+  path: string;
+  method: string;
+}
+
+interface LogSessionContext {
+  strategy: "uploadToken" | "unscoped-request";
+  uploadToken: string | null;
+}
+
+interface LogCategoryContext {
+  value: string | null;
+  label: string | null;
+}
+
+interface LogSelectedStyleContext {
+  styleId: string;
+  styleName: string;
+}
+
+interface LogFallbackContext {
+  recommendationUsed: boolean | null;
+  contentUsed: boolean | null;
+  overallUsed: boolean;
+}
+
+interface LogRegenerationContext {
+  count: number;
+  isRegenerated: boolean;
+}
 
 export interface StructuredLogPayload {
-  uploadIdentifier: string;
+  route: LogRouteContext;
+  session: LogSessionContext;
+  category: LogCategoryContext;
   recommendedStyles: Array<{
     styleId: string;
     styleName: string;
     score: number;
     reason: string;
   }>;
-  finalSelectedStyle: {
-    styleId: string;
-    styleName: string;
-  } | null;
+  selectedStyle: LogSelectedStyleContext | null;
   generationResult: Record<string, unknown> | null;
-  isRegenerated: boolean;
-  fallbackUsed: boolean;
+  regeneration: LogRegenerationContext;
+  fallback: LogFallbackContext;
   generatedAt: string;
   extra?: Record<string, unknown>;
 }
@@ -62,19 +96,45 @@ export function buildStructuredLogPayload(payload: StructuredLogPayload): Struct
   return payload;
 }
 
+function readStringAttribute(
+  attributes: Record<string, string | string[]>,
+  key: string
+): string | null {
+  const value = attributes[key];
+  return typeof value === "string" ? value : null;
+}
+
+function readTraceMetadataValue(
+  attributes: Record<string, string | string[]>,
+  key: string
+): string | null {
+  return readStringAttribute(attributes, `${TRACE_METADATA_PREFIX}${key}`);
+}
+
+function buildTraceCorrelationContext() {
+  const propagatedAttributes = getPropagatedAttributesFromContext(otelContext.active());
+
+  return {
+    traceId: getActiveTraceId() ?? null,
+    spanId: getActiveSpanId() ?? null,
+    sessionId: readStringAttribute(propagatedAttributes, "session.id"),
+    traceName: readStringAttribute(propagatedAttributes, "langfuse.trace.name"),
+    routeName: readTraceMetadataValue(propagatedAttributes, "route_name"),
+    routePath: readTraceMetadataValue(propagatedAttributes, "route_path"),
+    routeMethod: readTraceMetadataValue(propagatedAttributes, "route_method"),
+    uploadToken: readTraceMetadataValue(propagatedAttributes, "upload_token")
+  };
+}
+
 export async function logEvent(eventType: string, payload: unknown): Promise<void> {
   await mkdir(LOG_DIRECTORY, { recursive: true });
-
-  const traceId = getActiveTraceId();
-  const spanId = getActiveSpanId();
 
   await appendFile(
     LOG_FILE,
     `${JSON.stringify({
       eventType,
       recordedAt: new Date().toISOString(),
-      traceId: traceId || null,
-      spanId: spanId || null,
+      correlation: buildTraceCorrelationContext(),
       payload
     })}\n`,
     "utf8"
