@@ -5,7 +5,8 @@ export type ProductCategory =
   | "glassware"
   | "tray"
   | "cutlery"
-  | "tableware";
+  | "tableware"
+  | "none";
 
 export type ProductColorCue =
   | "white"
@@ -31,9 +32,10 @@ export type ProductMaterialCue =
   | "metal"
   | "stone"
   | "linen"
-  | "mixed";
+  | "mixed"
+  | "none";
 
-export type ProductSurfaceTone = "warm" | "cool" | "neutral";
+export type ProductSurfaceTone = "warm" | "cool" | "neutral" | "none";
 export type ProductImageSource = "storage" | "references" | null;
 
 export type StyleId =
@@ -63,6 +65,24 @@ export interface ProductAnalysis {
   surfaceTone: ProductSurfaceTone;
   detectedTags: string[];
 }
+
+export interface ProductInputOverrides {
+  category: ProductCategory | null;
+  colorHints: ProductColorCue[];
+  materialHints: ProductMaterialCue[];
+  surfaceTone: ProductSurfaceTone | null;
+  materialNotes: string | null;
+  visualSummary: string | null;
+}
+
+export const EMPTY_PRODUCT_INPUT_OVERRIDES: ProductInputOverrides = {
+  category: null,
+  colorHints: [],
+  materialHints: [],
+  surfaceTone: null,
+  materialNotes: null,
+  visualSummary: null
+};
 
 export interface StylePreset {
   id: StyleId;

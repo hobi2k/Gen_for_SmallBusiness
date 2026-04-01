@@ -27,6 +27,9 @@ export default function HomePage() {
         <UploadPanel
           activeSeedId={flow.activeSeedId}
           file={flow.file}
+          inputOverrides={flow.inputOverrides}
+          onApplyInputOverrides={flow.handleApplyInputOverrides}
+          onInputOverridesChange={flow.handleInputOverridesChange}
           onUpload={flow.handleUpload}
           previewUrl={flow.previewUrl}
           recommending={flow.recommending}

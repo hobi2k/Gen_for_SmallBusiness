@@ -48,7 +48,7 @@ const COLOR_LABELS: Record<ProductColorCue, string> = {
   earthy: "어스톤",
   "low-saturation": "저채도",
   neutral: "뉴트럴",
-  unknown: "담백한"
+  unknown: ""
 };
 
 const STYLE_TONE_COPY: Record<
@@ -309,9 +309,13 @@ function secondaryColor(product: ProductAnalysis): string {
   return COLOR_LABELS[product.colorHints[1] ?? product.colorHints[0] ?? "unknown"];
 }
 
+function categoryTerm(product: ProductAnalysis): string {
+  return product.categoryLabel === "None" ? "상품" : product.categoryLabel;
+}
+
 function productHeadline(product: ProductAnalysis): string {
   const color = primaryColor(product);
-  return clipText(`${color} ${product.categoryLabel}`, 14);
+  return clipText(`${color ? `${color} ` : ""}${categoryTerm(product)}`, 14);
 }
 
 function materialNoun(product: ProductAnalysis): string {
@@ -330,7 +334,13 @@ function materialNoun(product: ProductAnalysis): string {
       return "스톤";
     case "linen":
       return "린넨";
+    case "none":
+      return categoryTerm(product);
     default:
+      if (product.materialNotes === "None") {
+        return categoryTerm(product);
+      }
+
       return normalizePlainText(product.materialNotes.split(",")[0] ?? "테이블웨어");
   }
 }
@@ -339,7 +349,16 @@ function shapeCue(product: ProductAnalysis): string {
   const summary = product.visualSummary;
   const cues = ["얇은 림", "원형", "곡선", "손잡이", "광택", "무광", "투명감", "결감", "슬림한 라인"];
 
+  if (summary === "None") {
+    return "형태";
+  }
+
   return cues.find((cue) => summary.includes(cue)) ?? clipText(summary, 28);
+}
+
+function colorPhrase(product: ProductAnalysis): string | null {
+  const color = primaryColor(product);
+  return color ? `${color} 톤 인상과` : null;
 }
 
 function buildKeywordCandidates(product: ProductAnalysis, style: StylePreset) {
@@ -350,13 +369,13 @@ function buildKeywordCandidates(product: ProductAnalysis, style: StylePreset) {
   const shape = normalizeSmartToken(shapeCue(product));
 
   return [
-    `${color}${material}`,
+    color ? `${color}${material}` : `${material}${categoryTerm(product)}`,
     shape,
-    `${color}${product.categoryLabel}무드`,
-    `${subColor}${material}감성`,
+    color ? `${color}${categoryTerm(product)}무드` : `${categoryTerm(product)}무드`,
+    subColor ? `${subColor}${material}감성` : `${material}감성`,
     ...tonePack.featureKeywords,
-    `${material}${product.categoryLabel}추천`,
-    `${product.categoryLabel}${style.name.replaceAll(" ", "")}`
+    `${material}${categoryTerm(product)}추천`,
+    `${categoryTerm(product)}${style.name.replaceAll(" ", "")}`
   ];
 }
 
@@ -395,14 +414,16 @@ function buildOneLineIntro(style: StylePreset, product: ProductAnalysis): string
 
 function buildDetailedDescription(style: StylePreset, product: ProductAnalysis): string {
   const tonePack = STYLE_TONE_COPY[style.id];
-  const color = primaryColor(product);
   const material = materialNoun(product);
   const shape = shapeCue(product);
+  const colorLead = colorPhrase(product);
 
   return clipText(
     [
-      `${product.categoryLabel} 특유의 ${shape}과 ${material} 표면감이 온라인 화면에서도 분명하게 보이도록 정리한 문구입니다.`,
-      `${color} 톤 인상과 ${style.name} 무드를 함께 살려 ${tonePack.detailMood}`,
+      `${categoryTerm(product)} 특유의 ${shape}과 ${material} 표면감이 온라인 화면에서도 분명하게 보이도록 정리한 문구입니다.`,
+      colorLead
+        ? `${colorLead} ${style.name} 무드를 함께 살려 ${tonePack.detailMood}`
+        : `${style.name} 무드를 함께 살려 ${tonePack.detailMood}`,
       `${tonePack.storeMood}로 활용하기 좋고, 상품과 직접 연결되는 표현만 남겨 스마트스토어 등록 문구로 쓰기 쉽게 구성했습니다.`
     ].join(" "),
     300
@@ -412,7 +433,11 @@ function buildDetailedDescription(style: StylePreset, product: ProductAnalysis):
 function buildShortStoreCopy(style: StylePreset, product: ProductAnalysis): string {
   const material = materialNoun(product);
   const shape = shapeCue(product);
-  return clipText(`${primaryColor(product)} ${material} ${product.categoryLabel}, ${shape}이 돋보이는 한 점`, 40);
+  const color = primaryColor(product);
+  return clipText(
+    `${color ? `${color} ` : ""}${material} ${categoryTerm(product)}, ${shape}이 돋보이는 한 점`,
+    40
+  );
 }
 
 function fallbackCopy(style: StylePreset, product: ProductAnalysis): GeneratedCopy {

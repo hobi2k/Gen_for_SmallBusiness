@@ -59,11 +59,21 @@ const SMARTSTORE_CONTENT_RULES = [
 ] as const;
 
 function fillTemplate(style: StylePreset, product: ProductAnalysis): string {
+  const categoryLabel = product.categoryLabel === "None" ? "상품" : product.categoryLabel;
+
   return style.promptTemplate
-    .replaceAll("{{product_category}}", product.categoryLabel)
+    .replaceAll("{{product_category}}", categoryLabel)
     .replaceAll("{{lighting_description}}", style.lightingDescription)
     .replaceAll("{{scene_setup}}", style.sceneSetup)
     .replaceAll("{{color_tone}}", style.colorTone);
+}
+
+function formatColorHints(product: ProductAnalysis): string {
+  return product.colorHints.filter((hint) => hint !== "unknown").join(", ") || "None";
+}
+
+function formatSurfaceTone(product: ProductAnalysis): string {
+  return product.surfaceTone === "none" ? "None" : product.surfaceTone;
 }
 
 function buildRepresentativePrompt(style: StylePreset, product: ProductAnalysis): string {
@@ -75,18 +85,20 @@ function buildLifestylePrompt(style: StylePreset, product: ProductAnalysis): str
 }
 
 function buildCopyPrompt(style: StylePreset, product: ProductAnalysis): string {
+  const categoryLabel = product.categoryLabel === "None" ? "상품" : product.categoryLabel;
+
   return [
     "당신은 오프라인 리빙 소품 상인을 위한 커머스 카피라이터다.",
     "스타일링 팁은 절대 포함하지 않는다.",
     "각 출력 타입의 목적을 분리해 생성한다.",
     ...SMARTSTORE_CONTENT_RULES,
     `스타일별 문체 지시: ${style.copyTone}`,
-    `상품 카테고리: ${product.categoryLabel}`,
+    `상품 카테고리: ${categoryLabel}`,
     `상품 인상: ${product.visualSummary}`,
-    `색감 단서: ${product.colorHints.join(", ")}`,
+    `색감 단서: ${formatColorHints(product)}`,
     `재질 메모: ${product.materialNotes}`,
-    `소재 단서: ${product.materialHints.join(", ")}`,
-    `전체 톤: ${product.surfaceTone}`,
+    `소재 단서: ${product.materialHints.filter((hint) => hint !== "none").join(", ") || "None"}`,
+    `전체 톤: ${formatSurfaceTone(product)}`,
     `선택 스타일: ${style.name}`,
     `조명: ${style.lightingDescription}`,
     `장면: ${style.sceneSetup}`,

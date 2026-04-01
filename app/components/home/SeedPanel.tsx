@@ -17,10 +17,10 @@ export function SeedPanel({
     <section className="panel">
       <div className="panel-header">
         <div>
-          <div className="step-badge">빠른 검증용 시드</div>
-          <h2 className="panel-title">업로드 없이도 추천 흐름을 검증할 수 있습니다.</h2>
+          <div className="step-badge">내부 QA/데모용 시드</div>
+          <h2 className="panel-title">업로드 없이도 추천 흐름을 빠르게 점검할 수 있습니다.</h2>
           <p className="panel-copy">
-            그릇, 접시, 컵, 유리잔, 트레이, 커트러리 예시 입력을 미리 준비했습니다.
+            최종 사용자용 입력이 아니라 개발 검증과 데모를 위한 예시 입력입니다.
           </p>
         </div>
       </div>

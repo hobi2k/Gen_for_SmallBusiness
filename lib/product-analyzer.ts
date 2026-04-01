@@ -1,5 +1,6 @@
 import {
   ProductAnalysis,
+  ProductInputOverrides,
   ProductCategory,
   ProductColorCue,
   ProductMaterialCue,
@@ -59,7 +60,7 @@ function inferCategory(fileName: string): { category: ProductCategory; categoryL
     patterns.some((pattern) => normalized.includes(pattern))
   );
 
-  return found ?? { category: "tableware", categoryLabel: "테이블웨어" };
+  return found ?? { category: "none", categoryLabel: "None" };
 }
 
 function inferColorHints(fileName: string): ProductColorCue[] {
@@ -68,7 +69,7 @@ function inferColorHints(fileName: string): ProductColorCue[] {
     patterns.some((pattern) => normalized.includes(pattern))
   ).map(({ cue }) => cue);
 
-  return matches.length ? Array.from(new Set(matches)) : ["neutral"];
+  return matches.length ? Array.from(new Set(matches)) : ["unknown"];
 }
 
 function inferMaterialHints(fileName: string): ProductMaterialCue[] {
@@ -77,22 +78,36 @@ function inferMaterialHints(fileName: string): ProductMaterialCue[] {
     patterns.some((pattern) => normalized.includes(pattern))
   ).map(({ cue }) => cue);
 
-  return matches.length ? Array.from(new Set(matches)) : ["ceramic"];
+  return matches.length ? Array.from(new Set(matches)) : ["none"];
 }
 
 function inferSurfaceTone(colorHints: ProductColorCue[]): ProductSurfaceTone {
-  if (colorHints.some((cue) => ["brown", "beige", "cream", "ivory", "pink", "earthy"].includes(cue))) {
+  const meaningfulColorHints = colorHints.filter((cue) => cue !== "unknown");
+
+  if (!meaningfulColorHints.length) {
+    return "none";
+  }
+
+  if (meaningfulColorHints.some((cue) => ["brown", "beige", "cream", "ivory", "pink", "earthy"].includes(cue))) {
     return "warm";
   }
 
-  if (colorHints.some((cue) => ["gray", "blue", "clear", "white"].includes(cue))) {
+  if (meaningfulColorHints.some((cue) => ["gray", "blue", "clear", "white"].includes(cue))) {
     return "cool";
   }
 
-  return "neutral";
+  if (meaningfulColorHints.some((cue) => ["neutral", "low-saturation", "black", "green"].includes(cue))) {
+    return "neutral";
+  }
+
+  return "none";
 }
 
 function describeMaterial(materialHints: ProductMaterialCue[]): string {
+  if (materialHints.includes("none")) {
+    return "None";
+  }
+
   if (materialHints.includes("glass")) {
     return "유리, 맑은 투명감";
   }
@@ -109,7 +124,15 @@ function describeMaterial(materialHints: ProductMaterialCue[]): string {
     return "스톤 계열, 묵직한 표면감";
   }
 
-  return "세라믹 또는 도자기, 안정적인 표면감";
+  if (materialHints.includes("linen")) {
+    return "린넨, 부드러운 패브릭 감성";
+  }
+
+  if (materialHints.includes("mixed")) {
+    return "혼합 소재, 복합적인 질감";
+  }
+
+  return "None";
 }
 
 function describeColors(colorHints: ProductColorCue[]): string {
@@ -131,7 +154,13 @@ function describeColors(colorHints: ProductColorCue[]): string {
     unknown: "뉴트럴 톤"
   };
 
-  return colorHints.map((cue) => toneMap[cue]).join(", ");
+  const meaningfulColorHints = colorHints.filter((cue) => cue !== "unknown");
+
+  if (!meaningfulColorHints.length) {
+    return "None";
+  }
+
+  return meaningfulColorHints.map((cue) => toneMap[cue]).join(", ");
 }
 
 function buildVisualSummary(
@@ -139,15 +168,61 @@ function buildVisualSummary(
   materialNotes: string,
   colorHints: ProductColorCue[]
 ): string {
-  return `${categoryLabel}의 단정한 형태를 유지하면서 ${materialNotes}과 ${describeColors(colorHints)} 인상이 함께 드러나는 상품`;
+  const subject = categoryLabel === "None" ? "상품" : categoryLabel;
+  const colorNotes = describeColors(colorHints);
+
+  if (materialNotes === "None" && colorNotes === "None") {
+    return "None";
+  }
+
+  if (materialNotes === "None") {
+    return `${subject}의 단정한 형태와 ${colorNotes} 인상이 드러나는 상품`;
+  }
+
+  if (colorNotes === "None") {
+    return `${subject}의 단정한 형태와 ${materialNotes}이 드러나는 상품`;
+  }
+
+  return `${subject}의 단정한 형태를 유지하면서 ${materialNotes}과 ${colorNotes} 인상이 함께 드러나는 상품`;
 }
 
-export async function analyzeProductUpload(file: File): Promise<ProductAnalysis> {
-  const { category, categoryLabel } = inferCategory(file.name);
-  const colorHints = inferColorHints(file.name);
-  const materialHints = inferMaterialHints(file.name);
-  const surfaceTone = inferSurfaceTone(colorHints);
-  const materialNotes = describeMaterial(materialHints);
+function categoryLabelFor(category: ProductCategory): string {
+  return CATEGORY_PATTERNS.find((item) => item.category === category)?.categoryLabel ?? "None";
+}
+
+function normalizeOptionalText(value: string | null | undefined): string | null {
+  const normalized = value?.trim();
+  return normalized ? normalized : null;
+}
+
+function normalizeColorHints(colorHints: ProductColorCue[]): ProductColorCue[] {
+  const meaningful = Array.from(new Set(colorHints.filter((cue) => cue !== "unknown")));
+  return meaningful.length ? meaningful : ["unknown"];
+}
+
+function normalizeMaterialHints(materialHints: ProductMaterialCue[]): ProductMaterialCue[] {
+  const meaningful = Array.from(new Set(materialHints.filter((cue) => cue !== "none")));
+  return meaningful.length ? meaningful : ["none"];
+}
+
+export async function analyzeProductUpload(
+  file: File,
+  overrides?: Partial<ProductInputOverrides>
+): Promise<ProductAnalysis> {
+  const inferredCategory = inferCategory(file.name);
+  const category = overrides?.category ?? inferredCategory.category;
+  const categoryLabel = categoryLabelFor(category);
+  const colorHints = normalizeColorHints(
+    overrides?.colorHints?.length ? overrides.colorHints : inferColorHints(file.name)
+  );
+  const materialHints = normalizeMaterialHints(
+    overrides?.materialHints?.length ? overrides.materialHints : inferMaterialHints(file.name)
+  );
+  const surfaceTone = overrides?.surfaceTone ?? inferSurfaceTone(colorHints);
+  const materialNotes = normalizeOptionalText(overrides?.materialNotes) ?? describeMaterial(materialHints);
+  const visualSummary =
+    normalizeOptionalText(overrides?.visualSummary) ??
+    buildVisualSummary(categoryLabel, materialNotes, colorHints);
 
   return {
     uploadToken: createUploadToken([file.name, file.size, file.type, file.lastModified]),
@@ -160,15 +235,23 @@ export async function analyzeProductUpload(file: File): Promise<ProductAnalysis>
     category,
     categoryLabel,
     materialNotes,
-    visualSummary: buildVisualSummary(categoryLabel, materialNotes, colorHints),
+    visualSummary,
     colorHints,
     materialHints,
     surfaceTone,
     detectedTags: [
       category,
-      ...colorHints,
-      ...materialHints,
-      ...materialNotes.split(", ").map((item) => item.toLowerCase())
+      ...colorHints.filter((hint) => hint !== "unknown"),
+      ...materialHints.filter((hint) => hint !== "none"),
+      ...(materialNotes === "None"
+        ? []
+        : materialNotes.split(", ").map((item) => item.toLowerCase())),
+      ...(visualSummary === "None"
+        ? []
+        : visualSummary
+            .toLowerCase()
+            .split(/[,\s]+/)
+            .filter((item) => item.length > 1))
     ]
   };
 }

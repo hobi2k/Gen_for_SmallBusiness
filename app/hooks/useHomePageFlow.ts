@@ -3,8 +3,10 @@ import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { STYLE_LIST } from "@/lib/style-presets";
 import {
   DevSeedPreview,
+  EMPTY_PRODUCT_INPUT_OVERRIDES,
   GeneratedPackage,
   ProductAnalysis,
+  ProductInputOverrides,
   StyleId,
   StyleRecommendation
 } from "@/lib/types";
@@ -32,6 +34,7 @@ interface ApplyRecommendationPayload {
 export interface HomePageFlowState {
   file: File | null;
   previewUrl: string | null;
+  inputOverrides: ProductInputOverrides;
   analysis: ProductAnalysis | null;
   recommendations: StyleRecommendation[];
   allStyles: StyleRecommendation[];
@@ -47,6 +50,8 @@ export interface HomePageFlowState {
   regenerateCount: number;
   copiedKey: string | null;
   error: string | null;
+  handleInputOverridesChange: (patch: Partial<ProductInputOverrides>) => void;
+  handleApplyInputOverrides: () => Promise<void>;
   handleUpload: (event: ChangeEvent<HTMLInputElement>) => Promise<void>;
   handleSeedLoad: (seed: DevSeedPreview) => void;
   handleSelectStyle: (styleId: StyleId) => Promise<void>;
@@ -100,6 +105,9 @@ export function useHomePageFlow({
 }: UseHomePageFlowOptions): HomePageFlowState {
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [inputOverrides, setInputOverrides] = useState<ProductInputOverrides>(
+    EMPTY_PRODUCT_INPUT_OVERRIDES
+  );
   const [analysis, setAnalysis] = useState<ProductAnalysis | null>(null);
   const [recommendations, setRecommendations] = useState<StyleRecommendation[]>([]);
   const [allStyles, setAllStyles] = useState<StyleRecommendation[]>([]);
@@ -171,7 +179,11 @@ export function useHomePageFlow({
     setPreviewUrl(preview);
   }
 
-  async function requestRecommendations(nextFile: File, nextPreviewUrl: string) {
+  async function requestRecommendations(
+    nextFile: File,
+    nextPreviewUrl: string,
+    nextOverrides: ProductInputOverrides
+  ) {
     setRecommending(true);
     setError(null);
     setGeneratedPackage(null);
@@ -179,6 +191,7 @@ export function useHomePageFlow({
     try {
       const formData = new FormData();
       formData.append("file", nextFile);
+      formData.append("metadata", JSON.stringify(nextOverrides));
 
       const response = await fetch("/api/recommend-styles", {
         method: "POST",
@@ -235,13 +248,31 @@ export function useHomePageFlow({
     setGeneratedPackage(null);
     setRegenerateCount(0);
 
-    await requestRecommendations(nextFile, nextPreviewUrl);
+    await requestRecommendations(nextFile, nextPreviewUrl, inputOverrides);
+  }
+
+  function handleInputOverridesChange(patch: Partial<ProductInputOverrides>) {
+    setInputOverrides((current) => ({
+      ...current,
+      ...patch
+    }));
+  }
+
+  async function handleApplyInputOverrides() {
+    if (!file || !previewUrl) {
+      setError("이미지를 먼저 업로드한 뒤 선택 사항을 반영해 주세요.");
+      return;
+    }
+
+    setActiveSeedId(null);
+    await requestRecommendations(file, previewUrl, inputOverrides);
   }
 
   function handleSeedLoad(seed: DevSeedPreview) {
     releasePreviewUrl(previewUrl);
     setFile(null);
     setActiveSeedId(seed.id);
+    setInputOverrides(EMPTY_PRODUCT_INPUT_OVERRIDES);
     applyRecommendationPayload({
       analysis: seed.analysis,
       recommendations: seed.recommendations,
@@ -340,6 +371,7 @@ export function useHomePageFlow({
   return {
     file,
     previewUrl,
+    inputOverrides,
     analysis,
     recommendations,
     allStyles,
@@ -355,6 +387,8 @@ export function useHomePageFlow({
     regenerateCount,
     copiedKey,
     error,
+    handleInputOverridesChange,
+    handleApplyInputOverrides,
     handleUpload,
     handleSeedLoad,
     handleSelectStyle,

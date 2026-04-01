@@ -44,6 +44,7 @@ export async function POST(request: Request) {
   const analysis = body.analysis;
   const regenerateCount = body.regenerateCount ?? 0;
   const style = STYLE_PRESETS[styleId];
+  const categoryLabel = analysis.categoryLabel === "None" ? "상품" : analysis.categoryLabel;
   const sessionId = resolveLangfuseSessionId(analysis.uploadToken);
   const recommendationFallbackUsed = Boolean(body.recommendationFallbackUsed);
   const baseRouteContext = {
@@ -114,8 +115,8 @@ export async function POST(request: Request) {
           name: style.name,
           summary: style.summary,
           score: 1,
-          reason: `${analysis.categoryLabel}에 맞춰 ${style.summary}을 중심으로 생성했습니다.`,
-          reasonHighlights: [`${analysis.categoryLabel} 카테고리 적합`, style.copyTone],
+          reason: `${categoryLabel}에 맞춰 ${style.summary}을 중심으로 생성했습니다.`,
+          reasonHighlights: [`${categoryLabel} 카테고리 적합`, style.copyTone],
           lightingDescription: style.lightingDescription,
           sceneSetup: style.sceneSetup,
           colorTone: style.colorTone,

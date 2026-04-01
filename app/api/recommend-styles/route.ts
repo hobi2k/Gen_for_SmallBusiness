@@ -9,6 +9,7 @@ import {
 import { analyzeProductUpload } from "@/lib/product-analyzer";
 import { recommendStyles } from "@/lib/style-recommender";
 import { saveUploadedFile } from "@/lib/storage-assets";
+import { ProductInputOverrides } from "@/lib/types";
 import { createUploadToken } from "@/lib/utils";
 
 export const runtime = "nodejs";
@@ -22,9 +23,20 @@ const ROUTE = {
 export async function POST(request: Request) {
   const formData = await request.formData();
   const uploaded = formData.get("file");
+  const rawMetadata = formData.get("metadata");
 
   if (!(uploaded instanceof File)) {
     return NextResponse.json({ error: "상품 이미지를 업로드해 주세요." }, { status: 400 });
+  }
+
+  let metadata: Partial<ProductInputOverrides> | undefined;
+
+  if (typeof rawMetadata === "string" && rawMetadata.trim()) {
+    try {
+      metadata = JSON.parse(rawMetadata) as Partial<ProductInputOverrides>;
+    } catch {
+      return NextResponse.json({ error: "선택 입력 정보를 해석하지 못했습니다." }, { status: 400 });
+    }
   }
 
   const uploadToken = createUploadToken([
@@ -51,7 +63,7 @@ export async function POST(request: Request) {
     async () => {
       const storedImage = await saveUploadedFile(uploaded, uploadToken);
       const analysis = {
-        ...(await analyzeProductUpload(uploaded)),
+        ...(await analyzeProductUpload(uploaded, metadata)),
         uploadToken,
         sourceImageSource: "storage" as const,
         sourceImageRelativePath: storedImage.relativePath,

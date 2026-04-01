@@ -75,6 +75,12 @@ export function StyleSelectionPanel({
   onSelectStyle,
   onGenerate
 }: StyleSelectionPanelProps) {
+  const colorHintsLabel =
+    analysis.colorHints.filter((hint) => hint !== "unknown").join(" · ") || "None";
+  const materialHintsLabel =
+    analysis.materialHints.filter((hint) => hint !== "none").join(" · ") || "None";
+  const surfaceToneLabel = analysis.surfaceTone === "none" ? "None" : analysis.surfaceTone;
+
   const styleOptions: Array<{
     id: StyleId;
     name: string;
@@ -109,15 +115,15 @@ export function StyleSelectionPanel({
         </div>
         <div className="mini-card">
           <strong>색감 단서</strong>
-          <span>{analysis.colorHints.join(" · ")}</span>
+          <span>{colorHintsLabel}</span>
         </div>
         <div className="mini-card">
           <strong>소재 단서</strong>
-          <span>{analysis.materialHints.join(" · ")}</span>
+          <span>{materialHintsLabel}</span>
         </div>
         <div className="mini-card">
           <strong>전체 톤</strong>
-          <span>{analysis.surfaceTone}</span>
+          <span>{surfaceToneLabel}</span>
         </div>
       </div>
 

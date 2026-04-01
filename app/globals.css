@@ -38,7 +38,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -194,7 +195,8 @@ img {
 .style-grid,
 .image-grid,
 .seed-grid,
-.result-card-grid {
+.result-card-grid,
+.metadata-form-grid {
   display: grid;
   gap: 14px;
 }
@@ -219,11 +221,16 @@ img {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.metadata-form-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .mini-card,
 .style-card,
 .copy-card,
 .image-card,
-.seed-card {
+.seed-card,
+.field-card {
   padding: 18px;
   border-radius: 20px;
   border: 1px solid var(--line);
@@ -233,7 +240,8 @@ img {
 .mini-card strong,
 .style-card strong,
 .copy-card strong,
-.seed-card strong {
+.seed-card strong,
+.field-card strong {
   display: block;
   margin-bottom: 8px;
 }
@@ -243,6 +251,25 @@ img {
 .copy-card span {
   color: var(--muted);
   line-height: 1.6;
+}
+
+.field-card {
+  display: grid;
+  gap: 10px;
+}
+
+.field-card--wide {
+  grid-column: span 3;
+}
+
+.field-card input,
+.field-card select {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.86);
+  color: var(--text);
 }
 
 .style-card,
@@ -492,6 +519,7 @@ img {
   .style-grid,
   .seed-grid,
   .upload-grid,
+  .metadata-form-grid,
   .result-card-grid {
     grid-template-columns: 1fr;
   }

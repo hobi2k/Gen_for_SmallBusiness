@@ -22,7 +22,8 @@ const BASE_CATEGORY_SCORES: Record<StyleId, Record<ProductCategory, number>> = {
     glassware: 0.87,
     tray: 0.9,
     cutlery: 0.93,
-    tableware: 0.74
+    tableware: 0.74,
+    none: 0.74
   },
   "natural-wood": {
     plate: 0.89,
@@ -31,7 +32,8 @@ const BASE_CATEGORY_SCORES: Record<StyleId, Record<ProductCategory, number>> = {
     glassware: 0.58,
     tray: 0.88,
     cutlery: 0.8,
-    tableware: 0.78
+    tableware: 0.78,
+    none: 0.78
   },
   "nordic-light": {
     plate: 0.88,
@@ -40,7 +42,8 @@ const BASE_CATEGORY_SCORES: Record<StyleId, Record<ProductCategory, number>> = {
     glassware: 0.92,
     tray: 0.73,
     cutlery: 0.71,
-    tableware: 0.8
+    tableware: 0.8,
+    none: 0.8
   },
   "french-vintage": {
     plate: 0.83,
@@ -49,7 +52,8 @@ const BASE_CATEGORY_SCORES: Record<StyleId, Record<ProductCategory, number>> = {
     glassware: 0.64,
     tray: 0.76,
     cutlery: 0.62,
-    tableware: 0.74
+    tableware: 0.74,
+    none: 0.74
   },
   "cozy-home-cafe": {
     plate: 0.79,
@@ -58,7 +62,8 @@ const BASE_CATEGORY_SCORES: Record<StyleId, Record<ProductCategory, number>> = {
     glassware: 0.9,
     tray: 0.82,
     cutlery: 0.61,
-    tableware: 0.77
+    tableware: 0.77,
+    none: 0.77
   },
   "japanese-simple-table": {
     plate: 0.88,
@@ -67,7 +72,8 @@ const BASE_CATEGORY_SCORES: Record<StyleId, Record<ProductCategory, number>> = {
     glassware: 0.67,
     tray: 0.66,
     cutlery: 0.81,
-    tableware: 0.8
+    tableware: 0.8,
+    none: 0.8
   }
 };
 
@@ -120,13 +126,17 @@ function buildStyleDescriptor(styleId: StyleId): string {
   ].join(" | ");
 }
 
+function categoryLabelForCopy(product: ProductAnalysis): string {
+  return product.categoryLabel === "None" ? "상품" : product.categoryLabel;
+}
+
 function buildProductDescriptor(product: ProductAnalysis): string {
   return [
-    product.categoryLabel,
+    categoryLabelForCopy(product),
     product.visualSummary,
     product.materialNotes,
-    product.colorHints.join(", "),
-    product.materialHints.join(", "),
+    product.colorHints.filter((hint) => hint !== "unknown").join(", ") || "none",
+    product.materialHints.filter((hint) => hint !== "none").join(", ") || "none",
     product.surfaceTone,
     product.detectedTags.join(", ")
   ].join(" | ");
@@ -162,7 +172,8 @@ function translateMaterialCue(cue: ProductMaterialCue): string {
     metal: "메탈 광택",
     stone: "스톤 표면감",
     linen: "린넨 감성",
-    mixed: "혼합 소재"
+    mixed: "혼합 소재",
+    none: "소재 단서 없음"
   };
 
   return labels[cue];
@@ -172,7 +183,8 @@ function translateSurfaceTone(surfaceTone: ProductSurfaceTone): string {
   const labels: Record<ProductSurfaceTone, string> = {
     warm: "따뜻한 전체 톤",
     cool: "맑고 차분한 전체 톤",
-    neutral: "절제된 중성 톤"
+    neutral: "절제된 중성 톤",
+    none: "전체 톤 단서 없음"
   };
 
   return labels[surfaceTone];
@@ -303,13 +315,13 @@ function buildReason(
 
   if (!positiveLabels.length) {
     return {
-      reason: `${product.categoryLabel}의 인상과 ${recommendation.name}의 ${recommendation.colorTone} 톤이 안정적으로 맞습니다.`,
+      reason: `${categoryLabelForCopy(product)}의 인상과 ${recommendation.name}의 ${recommendation.colorTone} 톤이 안정적으로 맞습니다.`,
       reasonHighlights: [recommendation.summary]
     };
   }
 
   return {
-    reason: `${recommendation.name}은 ${positiveLabels.join(", ")} 조건이 겹쳐 ${product.categoryLabel}에 특히 잘 맞습니다.`,
+    reason: `${recommendation.name}은 ${positiveLabels.join(", ")} 조건이 겹쳐 ${categoryLabelForCopy(product)}에 특히 잘 맞습니다.`,
     reasonHighlights: positiveLabels
   };
 }

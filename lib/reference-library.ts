@@ -25,7 +25,8 @@ const PRODUCT_PREFIXES: Record<ProductCategory, string[]> = {
   glassware: ["glassware", "cup"],
   tray: ["tray"],
   cutlery: ["cutlery"],
-  tableware: ["plate", "bowl", "cup", "glassware", "tray", "cutlery"]
+  tableware: ["plate", "bowl", "cup", "glassware", "tray", "cutlery"],
+  none: []
 };
 
 interface ScannedReferenceFile {
@@ -94,7 +95,8 @@ function emptyProductSamples(): Record<ProductCategory, ReferenceAsset[]> {
     glassware: [],
     tray: [],
     cutlery: [],
-    tableware: []
+    tableware: [],
+    none: []
   };
 }
 
