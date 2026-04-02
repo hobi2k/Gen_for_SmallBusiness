@@ -993,6 +993,26 @@ def _alpha_crop(image):
     return image.crop(bbox) if bbox else image
 
 
+def _taper_object_horizontally(image, *, top_scale: float, bottom_scale: float):
+    from PIL import Image
+
+    rgba = image.convert("RGBA")
+    width, height = rgba.size
+    max_scale = max(top_scale, bottom_scale, 1.0)
+    canvas_width = max(width, int(width * max_scale))
+    output = Image.new("RGBA", (canvas_width, height), (0, 0, 0, 0))
+
+    for y in range(height):
+        progress = y / max(height - 1, 1)
+        row_scale = top_scale + (bottom_scale - top_scale) * progress
+        row_width = max(1, int(width * row_scale))
+        row = rgba.crop((0, y, width, y + 1)).resize((row_width, 1), Image.Resampling.BICUBIC)
+        x = (canvas_width - row_width) // 2
+        output.paste(row, (x, y))
+
+    return _alpha_crop(output)
+
+
 def _apply_scene_geometry(
     cutout,
     *,
@@ -1004,6 +1024,34 @@ def _apply_scene_geometry(
 
     adjusted = cutout
     profile = _placement_profile(product)
+
+    if profile == "flat":
+        width, height = adjusted.size
+        flatten_ratio = 0.82 if kind == "representative" else 0.72
+        adjusted = adjusted.resize((width, max(1, int(height * flatten_ratio))), Image.Resampling.LANCZOS)
+        taper_strength = 0.08 if kind == "representative" else 0.14
+        adjusted = _taper_object_horizontally(
+            adjusted,
+            top_scale=max(0.72, 1.0 - taper_strength - min(0.04, abs(angle) / 120)),
+            bottom_scale=min(1.08, 1.0 + taper_strength * 0.12),
+        )
+
+    elif profile == "upright":
+        width, height = adjusted.size
+        perspective_ratio = 0.94 if kind == "representative" else 0.9
+        adjusted = adjusted.resize((width, max(1, int(height * perspective_ratio))), Image.Resampling.LANCZOS)
+        adjusted = _taper_object_horizontally(
+            adjusted,
+            top_scale=0.92,
+            bottom_scale=1.02,
+        )
+
+    elif profile == "linear":
+        width, height = adjusted.size
+        adjusted = adjusted.resize(
+            (max(1, int(width * (1.04 if kind == "lifestyle" else 1.02))), max(1, int(height * 0.92))),
+            Image.Resampling.LANCZOS,
+        )
 
     if kind == "lifestyle" and profile != "flat":
         shear_limit = 0.04 if profile == "upright" else 0.08
