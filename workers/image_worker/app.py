@@ -141,7 +141,9 @@ IP_ADAPTER_ENABLED = EFFECTIVE_DEVICE != "cpu"
 
 _PIPELINE = None
 _PIPELINE_LOCK = Lock()
+_INFERENCE_LOCK = Lock()
 _PIPELINE_LOAD_ERROR: Optional[str] = None
+_LAST_RUNTIME_ERROR: Optional[str] = None
 
 app = FastAPI(title="Lifestyle Shop Image Worker", version="0.2.0")
 
@@ -365,19 +367,26 @@ def _load_pipeline():
             raise HTTPException(status_code=503, detail=f"pipeline_init_failed: {_PIPELINE_LOAD_ERROR}") from error
 
 
+def _reset_scheduler(pipeline) -> None:
+    scheduler = getattr(pipeline, "scheduler", None)
+    if scheduler is None or not hasattr(scheduler, "config") or not hasattr(scheduler, "from_config"):
+        return
+
+    pipeline.scheduler = scheduler.from_config(scheduler.config)
+
+
 def _deterministic_seed(*parts: object) -> int:
     raw = ":".join(str(part) for part in parts).encode("utf-8")
     return int(sha256(raw).hexdigest()[:8], 16)
 
 
 def _build_generator(torch_module, seed: int):
-    device = str(RUNTIME_CONFIG["device"])
-    generator_device = "cuda" if device == "cuda" else "cpu"
+    generator_device = "cuda" if EFFECTIVE_DEVICE == "cuda" else "cpu"
     return torch_module.Generator(device=generator_device).manual_seed(seed)
 
 
 def _clear_device_cache(torch_module) -> None:
-    device = str(RUNTIME_CONFIG["device"])
+    device = EFFECTIVE_DEVICE
 
     if device == "cuda" and torch_module.cuda.is_available():
         torch_module.cuda.empty_cache()
@@ -390,7 +399,7 @@ def _clear_device_cache(torch_module) -> None:
 @app.get("/health")
 def health():
     return {
-        "ok": _PIPELINE_LOAD_ERROR is None,
+        "ok": _PIPELINE_LOAD_ERROR is None and _LAST_RUNTIME_ERROR is None,
         "loaded": _PIPELINE is not None,
         "profile": RUNTIME_CONFIG["profile"],
         "requested_device": RUNTIME_CONFIG["device"],
@@ -407,12 +416,14 @@ def health():
         "ip_scale": RUNTIME_CONFIG["ip_scale"],
         "ip_adapter_enabled": IP_ADAPTER_ENABLED,
         "device_fallback_reason": DEVICE_FALLBACK_REASON,
-        "last_error": _PIPELINE_LOAD_ERROR,
+        "last_error": _LAST_RUNTIME_ERROR or _PIPELINE_LOAD_ERROR,
     }
 
 
 @app.post("/generate", response_model=GenerateResponse)
 def generate(payload: GenerateRequest, authorization: Optional[str] = Header(default=None)):
+    global _LAST_RUNTIME_ERROR
+
     _require_auth(authorization)
 
     try:
@@ -476,19 +487,22 @@ def generate(payload: GenerateRequest, authorization: Optional[str] = Header(def
         generator = _build_generator(torch, seed)
 
         try:
-            result = pipeline(
-                prompt=prompt_variant.prompt,
-                negative_prompt=negative_prompt,
-                image=control_image,
-                controlnet_conditioning_scale=float(RUNTIME_CONFIG["control_scale"]),
-                guidance_scale=_effective_guidance_scale(),
-                num_inference_steps=_effective_steps(),
-                width=width,
-                height=height,
-                generator=generator,
-                **({"ip_adapter_image": style_image} if IP_ADAPTER_ENABLED else {}),
-            ).images[0]
-        except RuntimeError as error:  # pragma: no cover - runtime path
+            with _INFERENCE_LOCK:
+                _reset_scheduler(pipeline)
+                result = pipeline(
+                    prompt=prompt_variant.prompt,
+                    negative_prompt=negative_prompt,
+                    image=control_image,
+                    controlnet_conditioning_scale=float(RUNTIME_CONFIG["control_scale"]),
+                    guidance_scale=_effective_guidance_scale(),
+                    num_inference_steps=_effective_steps(),
+                    width=width,
+                    height=height,
+                    generator=generator,
+                    **({"ip_adapter_image": style_image} if IP_ADAPTER_ENABLED else {}),
+                ).images[0]
+        except Exception as error:  # pragma: no cover - runtime path
+            _LAST_RUNTIME_ERROR = str(error)
             _clear_device_cache(torch)
             raise HTTPException(status_code=503, detail=f"generation_failed: {error}") from error
 
@@ -496,6 +510,7 @@ def generate(payload: GenerateRequest, authorization: Optional[str] = Header(def
         absolute_output_path = output_directory / file_name
         result.save(absolute_output_path)
         _clear_device_cache(torch)
+        _LAST_RUNTIME_ERROR = None
 
         return GeneratedImagePayload(
             relative_path=str(absolute_output_path.relative_to(STORAGE_ROOT)).replace("\\", "/"),
