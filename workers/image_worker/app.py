@@ -481,6 +481,58 @@ def _analyze_scene_context(scene_image, focus_box: tuple[int, int, int, int]) ->
     }
 
 
+def _find_table_anchor(scene_image, *, kind: Literal["representative", "lifestyle"]) -> dict[str, float]:
+    import cv2
+    import numpy as np
+
+    rgb = scene_image.convert("RGB")
+    array = np.array(rgb)
+    height, width = array.shape[:2]
+
+    search_top = int(height * (0.5 if kind == "representative" else 0.56))
+    region = array[search_top:, :, :]
+    if region.size == 0:
+        return {"x": width / 2, "y": height * (0.78 if kind == "representative" else 0.82), "confidence": 0.0}
+
+    gray = cv2.cvtColor(region, cv2.COLOR_RGB2GRAY)
+    edges = cv2.Canny(gray, 60, 150)
+    lines = cv2.HoughLinesP(
+        edges,
+        1,
+        np.pi / 180,
+        threshold=36,
+        minLineLength=max(100, int(width * 0.18)),
+        maxLineGap=22,
+    )
+
+    candidates: list[tuple[float, float, float]] = []
+    if lines is not None:
+        for line in lines[:, 0]:
+            x1, y1, x2, y2 = line
+            angle = float(np.degrees(np.arctan2(y2 - y1, x2 - x1)))
+            if abs(angle) > 12:
+                continue
+
+            line_y = search_top + (y1 + y2) / 2
+            line_x = (x1 + x2) / 2
+            length = float(np.hypot(x2 - x1, y2 - y1))
+            center_bias = 1 - abs((line_x / max(width, 1)) - 0.5)
+            lower_bias = min(1.0, max(0.0, (line_y / max(height, 1) - 0.48) / 0.45))
+            score = length * (0.45 + center_bias * 0.35 + lower_bias * 0.2)
+            candidates.append((score, line_x, line_y))
+
+    if not candidates:
+        return {"x": width / 2, "y": height * (0.78 if kind == "representative" else 0.82), "confidence": 0.0}
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    _, line_x, line_y = candidates[0]
+    return {
+        "x": line_x,
+        "y": line_y,
+        "confidence": 1.0,
+    }
+
+
 def _alpha_crop(image):
     alpha = image.getchannel("A")
     bbox = alpha.getbbox()
@@ -586,8 +638,10 @@ def _compose_identity_locked_image(
         target_width = int(target_width * scale)
         target_height = max_height
 
-    center_x = scene_width // 2
-    bottom_y = int(scene_height * (0.76 if kind == "representative" else 0.8))
+    anchor = _find_table_anchor(scene, kind=kind)
+    center_x = int(anchor["x"]) if anchor["confidence"] > 0 else scene_width // 2
+    bottom_y = int(anchor["y"]) if anchor["confidence"] > 0 else int(scene_height * (0.76 if kind == "representative" else 0.8))
+    bottom_y = max(int(scene_height * 0.58), min(int(scene_height * 0.9), bottom_y))
     rough_x = center_x - target_width // 2
     rough_y = bottom_y - target_height
 
@@ -604,7 +658,8 @@ def _compose_identity_locked_image(
 
     target_width, target_height = resized_cutout.size
     product_x = center_x - target_width // 2
-    product_y = bottom_y - target_height
+    contact_lift = max(2, int(target_height * 0.02))
+    product_y = bottom_y - target_height - contact_lift
 
     duplicate_cleanup_layer = Image.new("RGBA", scene.size, (0, 0, 0, 0))
     duplicate_cleanup_mask = Image.new("L", scene.size, 0)

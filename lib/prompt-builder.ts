@@ -1,8 +1,61 @@
 import { ProductAnalysis, PromptBundle, StylePreset } from "@/lib/types";
 import { hashString, seededAspectRatios } from "@/lib/utils";
 
-const NEGATIVE_PROMPT =
-  "text, logo, watermark, brand label, distorted object, duplicated product, multiple products, second cup, second mug, extra cup, extra mug, cutout border, white box background, extra handle, broken edge, floating cutlery, deformed ceramic, unreadable typography, cartoon, illustration";
+const BASE_NEGATIVE_TERMS = [
+  "text",
+  "logo",
+  "watermark",
+  "brand label",
+  "distorted object",
+  "duplicated product",
+  "multiple products",
+  "cutout border",
+  "white box background",
+  "extra handle",
+  "broken edge",
+  "floating cutlery",
+  "deformed ceramic",
+  "unreadable typography",
+  "cartoon",
+  "illustration"
+] as const;
+
+const KITCHEN_DOMAIN_NEGATIVE_TERMS = [
+  "living room sofa",
+  "lounge chair",
+  "bedroom",
+  "outdoor patio",
+  "floor placement",
+  "empty window view",
+  "product floating in air",
+  "bathroom sink",
+  "office desk",
+  "bedside table"
+] as const;
+
+const STYLE_SCENE_DIRECTIVES: Record<StylePreset["id"], string> = {
+  "modern-minimal":
+    "minimal modern kitchen interior, matte kitchen island or dining table, clean tabletop visible in foreground",
+  "natural-wood":
+    "warm wooden kitchen interior, natural dining table surface, soft kitchen daylight",
+  "nordic-light":
+    "bright nordic kitchen dining space, light wood table, airy kitchen window light",
+  "french-vintage":
+    "french vintage kitchen dining table, classic cabinetry, elegant tabletop scene",
+  "cozy-home-cafe":
+    "cozy kitchen home cafe corner, warm dining table, coffee-ready tabletop",
+  "japanese-simple-table":
+    "calm japanese kitchen dining table, simple tabletop, restrained kitchen interior"
+};
+
+const STYLE_NEGATIVE_TERMS: Record<StylePreset["id"], string[]> = {
+  "modern-minimal": ["ornate lounge decor", "sofa set", "busy living room"],
+  "natural-wood": ["hotel lobby", "marble living room", "industrial office"],
+  "nordic-light": ["dark lounge", "velvet sofa", "bar counter"],
+  "french-vintage": ["modern living room", "minimal lounge", "outdoor terrace"],
+  "cozy-home-cafe": ["living room couch", "bedroom scene", "window-only landscape"],
+  "japanese-simple-table": ["western lounge", "sofa living room", "garden patio"]
+};
 
 const COPY_SCHEMA = JSON.stringify(
   {
@@ -94,12 +147,66 @@ function promptProductDescriptor(product: ProductAnalysis): string {
   return parts.join(", ");
 }
 
+function kitchenSceneDirective(style: StylePreset): string {
+  return STYLE_SCENE_DIRECTIVES[style.id];
+}
+
+function productNegativeTerms(product: ProductAnalysis): string[] {
+  const categoryToken =
+    product.category === "glassware"
+      ? "glass"
+      : product.category === "none" || product.category === "tableware"
+        ? "tableware product"
+        : product.category;
+
+  const colorTerms = product.colorHints.filter((hint) => hint !== "unknown").slice(0, 2);
+  const materialTerms = product.materialHints.filter((hint) => hint !== "none").slice(0, 2);
+  const summary = product.visualSummary !== "None" ? product.visualSummary : "";
+  const notes = product.materialNotes !== "None" ? product.materialNotes : "";
+
+  const terms = [
+    `second ${categoryToken}`,
+    `extra ${categoryToken}`,
+    `duplicate foreground ${categoryToken}`,
+    ...colorTerms.map((color) => `${color} ${categoryToken}`),
+    ...materialTerms.map((material) => `${material} ${categoryToken}`)
+  ];
+
+  if (summary) {
+    terms.push(`foreground product summary ${summary}`);
+  }
+
+  if (notes) {
+    terms.push(`foreground material note ${notes}`);
+  }
+
+  if (product.surfaceTone !== "none") {
+    terms.push(`${product.surfaceTone} toned ${categoryToken}`);
+  }
+
+  return terms;
+}
+
+function buildNegativePrompt(style: StylePreset, product: ProductAnalysis): string {
+  const terms = [
+    ...BASE_NEGATIVE_TERMS,
+    ...KITCHEN_DOMAIN_NEGATIVE_TERMS,
+    ...STYLE_NEGATIVE_TERMS[style.id],
+    ...productNegativeTerms(product)
+  ];
+
+  return Array.from(new Set(terms.map((term) => term.trim()).filter(Boolean))).join(", ");
+}
+
 function buildRepresentativePrompt(style: StylePreset, product: ProductAnalysis): string {
   return [
     `premium ecommerce background scene for ${promptCategory(product)}`,
     promptProductDescriptor(product),
+    kitchenSceneDirective(style),
     style.promptKeywords.join(", "),
-    "clean empty placement area at center",
+    "single kitchen or dining space only",
+    "clean empty placement area on the table",
+    "tabletop visible in lower foreground",
     "single setup only",
     "do not render the product itself",
     "no duplicate object",
@@ -115,8 +222,11 @@ function buildLifestylePrompt(style: StylePreset, product: ProductAnalysis): str
   return [
     `lifestyle background scene for ${promptCategory(product)}`,
     promptProductDescriptor(product),
+    kitchenSceneDirective(style),
     style.promptKeywords.join(", "),
-    "clean placement area reserved for one product",
+    "single kitchen or dining space only",
+    "clean placement area reserved on the dining table",
+    "tabletop visible in lower foreground",
     "do not render the product itself",
     "no duplicate object",
     "natural perspective",
@@ -175,7 +285,7 @@ export function buildPromptBundle(
       { aspectRatio: second, prompt: buildLifestylePrompt(style, product) },
       { aspectRatio: third, prompt: buildLifestylePrompt(style, product) }
     ],
-    negativePrompt: NEGATIVE_PROMPT,
+    negativePrompt: buildNegativePrompt(style, product),
     copyPrompt: buildCopyPrompt(style, product),
     copySchema: COPY_SCHEMA
   };
