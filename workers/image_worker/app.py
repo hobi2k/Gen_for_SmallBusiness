@@ -29,6 +29,7 @@ IMAGE_WORKER_PROFILE = os.getenv("IMAGE_WORKER_PROFILE", "full").strip().lower()
 PROFILE_DEFAULTS = {
     "full": {
         "base_model": "stabilityai/stable-diffusion-xl-base-1.0",
+        "inpaint_model": "diffusers/stable-diffusion-xl-1.0-inpainting-0.1",
         "controlnet_model": "diffusers/controlnet-canny-sdxl-1.0",
         "ip_adapter_repo": "h94/IP-Adapter",
         "ip_adapter_weight": "ip-adapter_sdxl.bin",
@@ -47,6 +48,7 @@ PROFILE_DEFAULTS = {
     },
     "lite-mps": {
         "base_model": "stable-diffusion-v1-5/stable-diffusion-v1-5",
+        "inpaint_model": "runwayml/stable-diffusion-inpainting",
         "controlnet_model": "lllyasviel/control_v11p_sd15_canny",
         "ip_adapter_repo": "h94/IP-Adapter",
         "ip_adapter_weight": "ip-adapter_sd15.bin",
@@ -86,6 +88,7 @@ def _resolve_runtime_config() -> dict[str, Any]:
     return {
         "profile": _profile_key(),
         "base_model": _env_or_default("IMAGE_MODEL_BASE", profile["base_model"]),
+        "inpaint_model": _env_or_default("IMAGE_MODEL_INPAINT", profile["inpaint_model"]),
         "controlnet_model": _env_or_default("IMAGE_MODEL_CONTROLNET", profile["controlnet_model"]),
         "ip_adapter_repo": _env_or_default("IMAGE_MODEL_IP_ADAPTER_REPO", profile["ip_adapter_repo"]),
         "ip_adapter_weight": _env_or_default("IMAGE_MODEL_IP_ADAPTER_WEIGHT", profile["ip_adapter_weight"]),
@@ -141,9 +144,12 @@ IP_ADAPTER_ENABLED = EFFECTIVE_DEVICE != "cpu"
 
 
 _PIPELINE = None
+_REFINEMENT_PIPELINE = None
 _PIPELINE_LOCK = Lock()
+_REFINEMENT_PIPELINE_LOCK = Lock()
 _INFERENCE_LOCK = Lock()
 _PIPELINE_LOAD_ERROR: Optional[str] = None
+_REFINEMENT_PIPELINE_LOAD_ERROR: Optional[str] = None
 _LAST_RUNTIME_ERROR: Optional[str] = None
 _CUTOUT_SESSION = None
 _CUTOUT_SESSION_LOCK = Lock()
@@ -1327,6 +1333,134 @@ def _clear_reserved_zone_conflicts(
     return Image.alpha_composite(scene_rgba, cleanup_layer)
 
 
+def _build_refinement_prompt(product: ProductPayload) -> str:
+    category_label = product.category_label if product.category_label != "None" else "product"
+    descriptor = ", ".join(
+        part
+        for part in [
+            product.visual_summary if product.visual_summary != "None" else "",
+            product.material_notes if product.material_notes != "None" else "",
+        ]
+        if part
+    )
+
+    prompt_parts = [
+        f"photorealistic {category_label} integrated naturally on the tabletop",
+        "preserve exact product identity",
+        "preserve exact silhouette",
+        "preserve handle rim and proportions",
+        "match surrounding light and reflections",
+        "realistic contact shadow",
+        "realistic material response",
+        "premium ecommerce product photo",
+    ]
+
+    if descriptor:
+        prompt_parts.append(descriptor)
+
+    return ", ".join(prompt_parts)
+
+
+def _refine_with_inpaint(
+    *,
+    scene,
+    product_layer,
+    product_x: int,
+    product_y: int,
+    product: ProductPayload,
+    kind: Literal["representative", "lifestyle"],
+):
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFilter
+
+    pipeline = _load_refinement_pipeline()
+    if pipeline is None:
+        return scene
+
+    scene_rgba = scene.convert("RGBA")
+    alpha = product_layer.getchannel("A")
+    if alpha.getbbox() is None:
+        return scene_rgba
+
+    pad_x = max(28, int(product_layer.size[0] * 0.28))
+    pad_y = max(24, int(product_layer.size[1] * 0.22))
+    roi_box = (
+        max(0, product_x - pad_x),
+        max(0, product_y - pad_y),
+        min(scene_rgba.size[0], product_x + product_layer.size[0] + pad_x),
+        min(scene_rgba.size[1], product_y + product_layer.size[1] + pad_y),
+    )
+    if roi_box[2] - roi_box[0] < 64 or roi_box[3] - roi_box[1] < 64:
+        return scene_rgba
+
+    roi = scene_rgba.crop(roi_box).convert("RGB")
+    mask = Image.new("L", roi.size, 0)
+    mask_alpha = alpha.filter(ImageFilter.MaxFilter(size=19)).filter(ImageFilter.GaussianBlur(radius=5))
+    mask.paste(mask_alpha, (product_x - roi_box[0], product_y - roi_box[1]))
+
+    draw = ImageDraw.Draw(mask)
+    ellipse_box = (
+        product_x - roi_box[0] + int(product_layer.size[0] * 0.14),
+        product_y - roi_box[1] + int(product_layer.size[1] * 0.78),
+        product_x - roi_box[0] + int(product_layer.size[0] * 0.86),
+        product_y - roi_box[1] + int(product_layer.size[1] * 1.04),
+    )
+    draw.ellipse(ellipse_box, fill=200)
+    mask = mask.filter(ImageFilter.GaussianBlur(radius=6))
+
+    roi_width, roi_height = roi.size
+    target_long_side = 640 if kind == "representative" else 704
+    scale = min(1.0, target_long_side / max(roi_width, roi_height))
+    if scale < 1.0:
+        target_size = (
+            _round_to_multiple(int(roi_width * scale)),
+            _round_to_multiple(int(roi_height * scale)),
+        )
+    else:
+        target_size = (_round_to_multiple(roi_width), _round_to_multiple(roi_height))
+
+    resized_roi = roi.resize(target_size, Image.Resampling.LANCZOS)
+    resized_mask = mask.resize(target_size, Image.Resampling.LANCZOS)
+
+    refinement_seed = _deterministic_seed(
+        "refine",
+        product.category,
+        product.visual_summary,
+        product.material_notes,
+        kind,
+        roi_box,
+    ) % (2**31)
+
+    try:
+        import torch
+
+        generator = _build_generator(torch, refinement_seed)
+        with _INFERENCE_LOCK:
+            _reset_scheduler(pipeline)
+            refined = pipeline(
+                prompt=_build_refinement_prompt(product),
+                negative_prompt=", ".join(
+                    [
+                        _product_negative_terms(product),
+                        "duplicate product, second product, extra object, extra cup, floating object, malformed handle, malformed rim, warped perspective",
+                    ]
+                ),
+                image=resized_roi,
+                mask_image=resized_mask,
+                num_inference_steps=10 if EFFECTIVE_DEVICE == "cuda" else 6,
+                guidance_scale=4.0,
+                strength=0.18 if _material_profile(product) == "glass" else 0.16,
+                generator=generator,
+            ).images[0]
+    except Exception:
+        return scene_rgba
+
+    refined = refined.resize((roi_width, roi_height), Image.Resampling.LANCZOS).convert("RGBA")
+    output = scene_rgba.copy()
+    output.alpha_composite(refined, (roi_box[0], roi_box[1]))
+    return output
+
+
 def _compose_identity_locked_image(
     *,
     scene_image,
@@ -1497,6 +1631,14 @@ def _compose_identity_locked_image(
         context=scene_context,
         product=product,
     )
+    scene = _refine_with_inpaint(
+        scene=scene,
+        product_layer=softened,
+        product_x=product_x,
+        product_y=product_y,
+        product=product,
+        kind=kind,
+    )
 
     return scene.convert("RGB")
 
@@ -1648,6 +1790,61 @@ def _load_pipeline():
             raise HTTPException(status_code=503, detail=f"pipeline_init_failed: {_PIPELINE_LOAD_ERROR}") from error
 
 
+def _load_refinement_pipeline():
+    global _REFINEMENT_PIPELINE
+    global _REFINEMENT_PIPELINE_LOAD_ERROR
+
+    if EFFECTIVE_DEVICE == "cpu":
+        return None
+
+    if _REFINEMENT_PIPELINE is not None:
+        return _REFINEMENT_PIPELINE
+
+    with _REFINEMENT_PIPELINE_LOCK:
+        if _REFINEMENT_PIPELINE is not None:
+            return _REFINEMENT_PIPELINE
+
+        try:
+            import torch
+            from diffusers import StableDiffusionInpaintPipeline, StableDiffusionXLInpaintPipeline
+
+            device = EFFECTIVE_DEVICE
+            pipeline_kind = str(RUNTIME_CONFIG["pipeline_kind"])
+            torch_dtype = _torch_dtype(torch, device)
+
+            pipeline_kwargs: dict[str, Any] = {"torch_dtype": torch_dtype}
+            if pipeline_kind == "sdxl":
+                pipeline_cls = StableDiffusionXLInpaintPipeline
+                pipeline_kwargs["use_safetensors"] = True
+            else:
+                pipeline_cls = StableDiffusionInpaintPipeline
+
+            pipeline = pipeline_cls.from_pretrained(
+                str(RUNTIME_CONFIG["inpaint_model"]),
+                **pipeline_kwargs,
+            )
+
+            if hasattr(pipeline, "enable_vae_slicing"):
+                pipeline.enable_vae_slicing()
+
+            if device == "cuda":
+                pipeline = pipeline.to("cuda")
+            elif device == "mps":
+                pipeline = pipeline.to("mps")
+            else:
+                pipeline = pipeline.to("cpu")
+
+            _REFINEMENT_PIPELINE = pipeline
+            _REFINEMENT_PIPELINE_LOAD_ERROR = None
+            return pipeline
+        except Exception as error:  # pragma: no cover - runtime path
+            _REFINEMENT_PIPELINE_LOAD_ERROR = str(error)
+            raise HTTPException(
+                status_code=503,
+                detail=f"refinement_pipeline_init_failed: {_REFINEMENT_PIPELINE_LOAD_ERROR}",
+            ) from error
+
+
 def _reset_scheduler(pipeline) -> None:
     scheduler = getattr(pipeline, "scheduler", None)
     if scheduler is None or not hasattr(scheduler, "config") or not hasattr(scheduler, "from_config"):
@@ -1677,17 +1874,23 @@ def _clear_device_cache(torch_module) -> None:
         torch_module.mps.empty_cache()
 
 
+def _round_to_multiple(value: int, multiple: int = 8) -> int:
+    return max(multiple, int(round(value / multiple)) * multiple)
+
+
 @app.get("/health")
 def health():
     return {
         "ok": _PIPELINE_LOAD_ERROR is None and _LAST_RUNTIME_ERROR is None,
         "loaded": _PIPELINE is not None,
+        "refinement_loaded": _REFINEMENT_PIPELINE is not None,
         "profile": RUNTIME_CONFIG["profile"],
         "requested_device": RUNTIME_CONFIG["device"],
         "effective_device": EFFECTIVE_DEVICE,
         "pipeline_kind": RUNTIME_CONFIG["pipeline_kind"],
         "engine": _engine_name(),
         "base_model": RUNTIME_CONFIG["base_model"],
+        "inpaint_model": RUNTIME_CONFIG["inpaint_model"],
         "controlnet_model": RUNTIME_CONFIG["controlnet_model"],
         "ip_adapter_repo": RUNTIME_CONFIG["ip_adapter_repo"],
         "ip_adapter_weight": RUNTIME_CONFIG["ip_adapter_weight"],
@@ -1697,7 +1900,7 @@ def health():
         "ip_scale": RUNTIME_CONFIG["ip_scale"],
         "ip_adapter_enabled": IP_ADAPTER_ENABLED,
         "device_fallback_reason": DEVICE_FALLBACK_REASON,
-        "last_error": _LAST_RUNTIME_ERROR or _PIPELINE_LOAD_ERROR,
+        "last_error": _LAST_RUNTIME_ERROR or _PIPELINE_LOAD_ERROR or _REFINEMENT_PIPELINE_LOAD_ERROR,
     }
 
 
