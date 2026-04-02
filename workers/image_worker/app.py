@@ -493,6 +493,24 @@ def _placement_profile(product: ProductPayload) -> Literal["flat", "upright", "l
     return "generic"
 
 
+def _material_profile(product: ProductPayload) -> Literal["glass", "ceramic", "metal", "wood", "generic"]:
+    descriptor = _product_descriptor_text(product)
+
+    if any(term in descriptor for term in ["glass", "glassware", "clear", "유리", "유리잔"]):
+        return "glass"
+
+    if any(term in descriptor for term in ["ceramic", "porcelain", "도자", "세라믹", "머그", "컵"]):
+        return "ceramic"
+
+    if any(term in descriptor for term in ["metal", "steel", "stainless", "알루미늄", "금속"]):
+        return "metal"
+
+    if any(term in descriptor for term in ["wood", "oak", "walnut", "우드", "원목", "나무"]):
+        return "wood"
+
+    return "generic"
+
+
 def _dynamic_placement_width_ratio(
     kind: Literal["representative", "lifestyle"],
     product: ProductPayload,
@@ -1017,16 +1035,26 @@ def _apply_scene_geometry(
     return adjusted
 
 
-def _apply_scene_lighting(cutout, context: dict[str, float]):
+def _apply_scene_lighting(cutout, context: dict[str, float], product: ProductPayload):
     from PIL import Image, ImageChops, ImageEnhance
 
     rgba = cutout.convert("RGBA")
     alpha = rgba.getchannel("A")
     rgb = rgba.convert("RGB")
+    material_profile = _material_profile(product)
 
     brightness_factor = max(0.88, min(1.16, 0.9 + context["brightness"] * 0.34))
     contrast_factor = max(0.94, min(1.08, 0.96 + abs(context["light_x"]) * 0.22))
     saturation_factor = max(0.92, min(1.06, 0.98 + context["warmth"] * 0.06))
+
+    if material_profile == "glass":
+        brightness_factor = min(1.22, brightness_factor + 0.04)
+        contrast_factor = max(0.9, contrast_factor - 0.03)
+        saturation_factor = min(1.08, saturation_factor + 0.02)
+    elif material_profile == "ceramic":
+        contrast_factor = min(1.12, contrast_factor + 0.02)
+    elif material_profile == "metal":
+        contrast_factor = min(1.14, contrast_factor + 0.04)
 
     rgb = ImageEnhance.Brightness(rgb).enhance(brightness_factor)
     rgb = ImageEnhance.Contrast(rgb).enhance(contrast_factor)
@@ -1058,7 +1086,29 @@ def _apply_scene_lighting(cutout, context: dict[str, float]):
 
     wrap_color = (255, 236, 214, 255) if warmth >= 0 else (225, 236, 248, 255)
     wrap_layer.paste(wrap_color, mask=ImageChops.multiply(alpha, wrap_alpha))
-    return Image.alpha_composite(lit, wrap_layer)
+    lit = Image.alpha_composite(lit, wrap_layer)
+
+    if material_profile in {"glass", "metal"}:
+        specular_alpha = Image.new("L", lit.size, 0)
+        specular_pixels = specular_alpha.load()
+        width, height = lit.size
+        highlight_from_left = light_x <= 0
+        for x in range(width):
+            horizontal = 1 - (
+                x / max(width - 1, 1)
+                if highlight_from_left
+                else (width - 1 - x) / max(width - 1, 1)
+            )
+            for y in range(height):
+                vertical = 1 - y / max(height - 1, 1)
+                intensity = max(0.0, min(1.0, horizontal * 0.75 + vertical * 0.25))
+                specular_pixels[x, y] = int(intensity * (42 if material_profile == "glass" else 30))
+
+        specular_layer = Image.new("RGBA", lit.size, (255, 255, 255, 255))
+        specular_layer.putalpha(ImageChops.multiply(alpha, specular_alpha))
+        lit = Image.alpha_composite(lit, specular_layer)
+
+    return lit
 
 
 def _refine_composited_roi(
@@ -1069,6 +1119,7 @@ def _refine_composited_roi(
     product_x: int,
     product_y: int,
     context: dict[str, float],
+    product: ProductPayload,
 ):
     import cv2
     import numpy as np
@@ -1117,10 +1168,22 @@ def _refine_composited_roi(
     bg_mean = edge_background.mean(axis=0)
     product_mean = edge_product.mean(axis=0)
     mean_shift = (bg_mean - product_mean) * 0.18
+    material_profile = _material_profile(product)
 
     product_rgb[alpha_mask] = np.clip(product_rgb[alpha_mask] + mean_shift, 0, 255)
     if edge_mask_bool.any():
         product_rgb[edge_mask_bool] = np.clip(product_rgb[edge_mask_bool] * 0.76 + bg_mean * 0.24, 0, 255)
+
+    background_luma = cv2.cvtColor(background_rgb.astype(np.uint8), cv2.COLOR_RGB2GRAY).astype(np.float32)
+    local_light_map = cv2.GaussianBlur(background_luma, (0, 0), sigmaX=max(6, product_layer.size[0] * 0.03))
+    local_light_map = cv2.normalize(local_light_map, None, alpha=-1.0, beta=1.0, norm_type=cv2.NORM_MINMAX)
+    local_light_rgb = np.repeat(local_light_map[..., None], 3, axis=2)
+    light_strength = 0.06 if material_profile == "ceramic" else 0.1 if material_profile == "glass" else 0.08
+    product_rgb[alpha_mask] = np.clip(
+        product_rgb[alpha_mask] * (1.0 + local_light_rgb[alpha_mask] * light_strength),
+        0,
+        255,
+    )
 
     sharpness = cv2.Laplacian(cv2.cvtColor(background_rgb.astype(np.uint8), cv2.COLOR_RGB2GRAY), cv2.CV_32F).var()
     harmonized = Image.fromarray(product_rgb.astype(np.uint8), mode="RGB").convert("RGBA")
@@ -1133,6 +1196,13 @@ def _refine_composited_roi(
     noise = np.random.normal(0.0, 10.0, product_rgb.shape).astype(np.float32)
     noisy_rgb = np.array(harmonized.convert("RGB")).astype(np.float32)
     noisy_rgb[alpha_mask] = np.clip(noisy_rgb[alpha_mask] + noise[alpha_mask] * noise_strength, 0, 255)
+
+    if material_profile == "glass":
+        translucent_mix = np.clip(background_rgb * 0.18 + noisy_rgb * 0.82, 0, 255)
+        center_alpha = np.array(product_alpha.filter(ImageFilter.GaussianBlur(radius=max(6, int(product_layer.size[0] * 0.02))))).astype(np.float32) / 255.0
+        translucent_mask = (center_alpha > 0.25) & (center_alpha < 0.92)
+        noisy_rgb[translucent_mask] = translucent_mix[translucent_mask]
+
     harmonized = Image.fromarray(noisy_rgb.astype(np.uint8), mode="RGB").convert("RGBA")
     harmonized.putalpha(product_alpha)
 
@@ -1202,7 +1272,7 @@ def _compose_identity_locked_image(
         product=product,
     )
     resized_cutout = adjusted_cutout.resize((target_width, target_height), Image.Resampling.LANCZOS)
-    resized_cutout = _apply_scene_lighting(resized_cutout, scene_context)
+    resized_cutout = _apply_scene_lighting(resized_cutout, scene_context, product)
 
     target_width, target_height = resized_cutout.size
     product_x = center_x - target_width // 2
@@ -1219,7 +1289,7 @@ def _compose_identity_locked_image(
         target_width = max(96, int(target_width * shrink_scale))
         target_height = max(84, int(target_height * shrink_scale))
         resized_cutout = resized_cutout.resize((target_width, target_height), Image.Resampling.LANCZOS)
-        resized_cutout = _apply_scene_lighting(resized_cutout, scene_context)
+        resized_cutout = _apply_scene_lighting(resized_cutout, scene_context, product)
 
     target_width, target_height = resized_cutout.size
     product_x = center_x - target_width // 2
@@ -1261,12 +1331,12 @@ def _compose_identity_locked_image(
     shadow_shape = shadow_shape.filter(
         ImageFilter.GaussianBlur(radius=max(10, int(target_width * 0.05)))
     )
-    shadow_opacity = int(max(72, min(132, 84 + (0.62 - scene_context["brightness"]) * 120)))
+    shadow_opacity = int(max(82, min(148, 98 + (0.62 - scene_context["brightness"]) * 138)))
     shadow_alpha = shadow_shape.getchannel("A").point(lambda p: min(255, int(p * shadow_opacity / 255)))
     shadow_shape.putalpha(shadow_alpha)
 
     shadow_dx = int(max(-target_width * 0.08, min(target_width * 0.08, -scene_context["light_x"] * target_width * 0.22)))
-    shadow_dy = int(max(8, target_height * (0.03 + max(0.0, 0.08 - scene_context["light_y"] * 0.04))))
+    shadow_dy = int(max(4, target_height * (0.018 + max(0.0, 0.05 - scene_context["light_y"] * 0.03))))
     shadow_x = product_x + int(target_width * 0.02) + shadow_dx
     shadow_y = product_y + target_height - int(shadow_shape.size[1] * 0.45) + shadow_dy
     shadow_layer.alpha_composite(shadow_shape, (shadow_x, shadow_y))
@@ -1306,6 +1376,7 @@ def _compose_identity_locked_image(
         product_x=product_x,
         product_y=product_y,
         context=scene_context,
+        product=product,
     )
 
     return scene.convert("RGB")
