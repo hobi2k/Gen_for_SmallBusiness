@@ -386,6 +386,30 @@ def _product_descriptor_text(product: ProductPayload) -> str:
     ).lower()
 
 
+def _placement_profile(product: ProductPayload) -> Literal["flat", "upright", "linear", "generic"]:
+    descriptor = _product_descriptor_text(product)
+
+    if any(
+        term in descriptor
+        for term in ["tray", "쟁반", "트레이", "plate", "접시", "bowl", "볼", "platter"]
+    ):
+        return "flat"
+
+    if any(
+        term in descriptor
+        for term in ["cutlery", "fork", "knife", "spoon", "커트러리", "수저", "포크", "나이프"]
+    ):
+        return "linear"
+
+    if any(
+        term in descriptor
+        for term in ["cup", "glass", "glassware", "mug", "컵", "유리잔", "머그"]
+    ):
+        return "upright"
+
+    return "generic"
+
+
 def _dynamic_placement_width_ratio(
     kind: Literal["representative", "lifestyle"],
     product: ProductPayload,
@@ -394,28 +418,36 @@ def _dynamic_placement_width_ratio(
     width, height = cutout_size
     aspect_ratio = width / max(height, 1)
     descriptor = _product_descriptor_text(product)
+    profile = _placement_profile(product)
 
-    ratio = 0.29 if kind == "representative" else 0.23
+    ratio = 0.27 if kind == "representative" else 0.22
 
     if aspect_ratio >= 1.75:
-        ratio += 0.14
+        ratio += 0.08
     elif aspect_ratio >= 1.35:
-        ratio += 0.09
-    elif aspect_ratio >= 1.1:
         ratio += 0.05
+    elif aspect_ratio >= 1.1:
+        ratio += 0.03
     elif aspect_ratio <= 0.62:
         ratio -= 0.05
     elif aspect_ratio <= 0.82:
         ratio -= 0.02
 
     if any(term in descriptor for term in ["tray", "쟁반", "트레이", "plate", "접시", "rect", "square", "사각", "넓", "wide"]):
-        ratio += 0.06
+        ratio += 0.01
 
     if any(term in descriptor for term in ["glassware", "glass", "유리잔", "tall", "긴", "높"]):
         ratio -= 0.03
 
     if any(term in descriptor for term in ["cutlery", "fork", "knife", "spoon", "커트러리", "수저"]):
-        ratio += 0.04
+        ratio += 0.02
+
+    if profile == "flat":
+        ratio -= 0.01 if kind == "representative" else 0.0
+    elif profile == "upright":
+        ratio -= 0.02 if kind == "lifestyle" else 0.0
+    elif profile == "linear":
+        ratio += 0.03
 
     return max(0.2, min(0.54, ratio))
 
@@ -481,18 +513,37 @@ def _analyze_scene_context(scene_image, focus_box: tuple[int, int, int, int]) ->
     }
 
 
-def _find_table_anchor(scene_image, *, kind: Literal["representative", "lifestyle"]) -> dict[str, float]:
+def _find_table_anchor(
+    scene_image,
+    *,
+    kind: Literal["representative", "lifestyle"],
+    product: ProductPayload,
+) -> dict[str, float]:
     import cv2
     import numpy as np
 
     rgb = scene_image.convert("RGB")
     array = np.array(rgb)
     height, width = array.shape[:2]
+    profile = _placement_profile(product)
 
-    search_top = int(height * (0.5 if kind == "representative" else 0.56))
+    search_top = int(
+        height
+        * (
+            0.58
+            if profile == "flat"
+            else 0.54
+            if kind == "representative"
+            else 0.6
+        )
+    )
     region = array[search_top:, :, :]
     if region.size == 0:
-        return {"x": width / 2, "y": height * (0.78 if kind == "representative" else 0.82), "confidence": 0.0}
+        return {
+            "x": width / 2,
+            "y": height * (0.82 if profile == "flat" else 0.8 if kind == "representative" else 0.84),
+            "confidence": 0.0,
+        }
 
     gray = cv2.cvtColor(region, cv2.COLOR_RGB2GRAY)
     edges = cv2.Canny(gray, 60, 150)
@@ -517,12 +568,16 @@ def _find_table_anchor(scene_image, *, kind: Literal["representative", "lifestyl
             line_x = (x1 + x2) / 2
             length = float(np.hypot(x2 - x1, y2 - y1))
             center_bias = 1 - abs((line_x / max(width, 1)) - 0.5)
-            lower_bias = min(1.0, max(0.0, (line_y / max(height, 1) - 0.48) / 0.45))
-            score = length * (0.45 + center_bias * 0.35 + lower_bias * 0.2)
+            lower_bias = min(1.0, max(0.0, (line_y / max(height, 1) - 0.56) / 0.32))
+            score = length * (0.35 + center_bias * 0.25 + lower_bias * 0.4)
             candidates.append((score, line_x, line_y))
 
     if not candidates:
-        return {"x": width / 2, "y": height * (0.78 if kind == "representative" else 0.82), "confidence": 0.0}
+        return {
+            "x": width / 2,
+            "y": height * (0.82 if profile == "flat" else 0.8 if kind == "representative" else 0.84),
+            "confidence": 0.0,
+        }
 
     candidates.sort(key=lambda item: item[0], reverse=True)
     _, line_x, line_y = candidates[0]
@@ -539,12 +594,21 @@ def _alpha_crop(image):
     return image.crop(bbox) if bbox else image
 
 
-def _apply_scene_geometry(cutout, *, kind: Literal["representative", "lifestyle"], angle: float):
+def _apply_scene_geometry(
+    cutout,
+    *,
+    kind: Literal["representative", "lifestyle"],
+    angle: float,
+    product: ProductPayload,
+):
     from PIL import Image
 
     adjusted = cutout
-    if kind == "lifestyle":
-        shear = max(-0.08, min(0.08, angle / 160))
+    profile = _placement_profile(product)
+
+    if kind == "lifestyle" and profile != "flat":
+        shear_limit = 0.04 if profile == "upright" else 0.08
+        shear = max(-shear_limit, min(shear_limit, angle / 180))
         width, height = adjusted.size
         output_width = int(width + abs(shear) * height)
         offset = max(0, int(-shear * height)) if shear < 0 else 0
@@ -557,7 +621,9 @@ def _apply_scene_geometry(cutout, *, kind: Literal["representative", "lifestyle"
         )
         adjusted = _alpha_crop(adjusted)
 
-    rotation = max(-4.0, min(4.0, angle * (0.22 if kind == "lifestyle" else 0.12)))
+    rotation_limit = 1.2 if profile == "flat" else 2.4 if profile == "upright" else 4.0
+    rotation_factor = 0.08 if profile == "flat" else 0.14 if profile == "upright" else 0.22
+    rotation = max(-rotation_limit, min(rotation_limit, angle * (rotation_factor if kind == "lifestyle" else 0.1)))
     if abs(rotation) >= 0.2:
         adjusted = adjusted.rotate(
             rotation,
@@ -638,10 +704,15 @@ def _compose_identity_locked_image(
         target_width = int(target_width * scale)
         target_height = max_height
 
-    anchor = _find_table_anchor(scene, kind=kind)
+    anchor = _find_table_anchor(scene, kind=kind, product=product)
     center_x = int(anchor["x"]) if anchor["confidence"] > 0 else scene_width // 2
-    bottom_y = int(anchor["y"]) if anchor["confidence"] > 0 else int(scene_height * (0.76 if kind == "representative" else 0.8))
-    bottom_y = max(int(scene_height * 0.58), min(int(scene_height * 0.9), bottom_y))
+    profile = _placement_profile(product)
+    bottom_y = (
+        int(anchor["y"])
+        if anchor["confidence"] > 0
+        else int(scene_height * (0.84 if profile == "flat" else 0.8 if kind == "representative" else 0.84))
+    )
+    bottom_y = max(int(scene_height * 0.64), min(int(scene_height * 0.92), bottom_y))
     rough_x = center_x - target_width // 2
     rough_y = bottom_y - target_height
 
@@ -652,13 +723,22 @@ def _compose_identity_locked_image(
         min(bottom_y + int(target_height * 0.2), scene_height),
     )
     scene_context = _analyze_scene_context(scene, context_box)
-    adjusted_cutout = _apply_scene_geometry(cutout, kind=kind, angle=scene_context["angle"])
+    adjusted_cutout = _apply_scene_geometry(
+        cutout,
+        kind=kind,
+        angle=scene_context["angle"],
+        product=product,
+    )
     resized_cutout = adjusted_cutout.resize((target_width, target_height), Image.Resampling.LANCZOS)
     resized_cutout = _apply_scene_lighting(resized_cutout, scene_context)
 
     target_width, target_height = resized_cutout.size
     product_x = center_x - target_width // 2
-    contact_lift = max(2, int(target_height * 0.02))
+    if profile == "flat":
+        center_x = int(scene_width * 0.5 if anchor["confidence"] <= 0 else center_x)
+        product_x = center_x - target_width // 2
+
+    contact_lift = max(1, int(target_height * (0.012 if profile == "flat" else 0.02)))
     product_y = bottom_y - target_height - contact_lift
 
     duplicate_cleanup_layer = Image.new("RGBA", scene.size, (0, 0, 0, 0))

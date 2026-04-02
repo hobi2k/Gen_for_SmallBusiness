@@ -1,5 +1,4 @@
 import { ProductAnalysis, PromptBundle, StylePreset } from "@/lib/types";
-import { hashString, seededAspectRatios } from "@/lib/utils";
 
 const BASE_NEGATIVE_TERMS = [
   "text",
@@ -21,41 +20,79 @@ const BASE_NEGATIVE_TERMS = [
 ] as const;
 
 const KITCHEN_DOMAIN_NEGATIVE_TERMS = [
+  "living room",
   "living room sofa",
+  "sofa",
+  "couch",
+  "armchair",
   "lounge chair",
+  "salon seating",
   "bedroom",
   "outdoor patio",
   "floor placement",
   "empty window view",
+  "panoramic window lounge",
   "product floating in air",
   "bathroom sink",
   "office desk",
-  "bedside table"
+  "bedside table",
+  "tv console",
+  "coffee table living room"
 ] as const;
 
 const STYLE_SCENE_DIRECTIVES: Record<StylePreset["id"], string> = {
   "modern-minimal":
-    "minimal modern kitchen interior, matte kitchen island or dining table, clean tabletop visible in foreground",
+    "minimal modern kitchen-dining interior, matte island or dining table surface filling the lower frame, subtle cabinetry in background",
   "natural-wood":
-    "warm wooden kitchen interior, natural dining table surface, soft kitchen daylight",
+    "warm wooden kitchen-dining interior, natural wood dining table surface dominant in foreground, calm kitchen shelves softly behind",
   "nordic-light":
-    "bright nordic kitchen dining space, light wood table, airy kitchen window light",
+    "bright nordic kitchen dining space, light wood dining table surface dominant in foreground, airy kitchen daylight with restrained cabinets",
   "french-vintage":
-    "french vintage kitchen dining table, classic cabinetry, elegant tabletop scene",
+    "french vintage kitchen dining table, classic cabinetry and subtle floral accents behind, elegant tabletop scene in foreground",
   "cozy-home-cafe":
-    "cozy kitchen home cafe corner, warm dining table, coffee-ready tabletop",
+    "cozy kitchen home-cafe dining corner, warm tabletop in foreground, coffee-ready kitchen shelving softly behind",
   "japanese-simple-table":
-    "calm japanese kitchen dining table, simple tabletop, restrained kitchen interior"
+    "calm japanese kitchen dining table, simple tabletop dominant in foreground, restrained kitchen joinery in background"
 };
 
 const STYLE_NEGATIVE_TERMS: Record<StylePreset["id"], string[]> = {
-  "modern-minimal": ["ornate lounge decor", "sofa set", "busy living room"],
-  "natural-wood": ["hotel lobby", "marble living room", "industrial office"],
-  "nordic-light": ["dark lounge", "velvet sofa", "bar counter"],
-  "french-vintage": ["modern living room", "minimal lounge", "outdoor terrace"],
-  "cozy-home-cafe": ["living room couch", "bedroom scene", "window-only landscape"],
-  "japanese-simple-table": ["western lounge", "sofa living room", "garden patio"]
+  "modern-minimal": ["ornate lounge decor", "sofa set", "busy living room", "decorative salon"],
+  "natural-wood": ["hotel lobby", "marble living room", "industrial office", "window-view lounge"],
+  "nordic-light": ["dark lounge", "velvet sofa", "bar counter", "living room seating area"],
+  "french-vintage": ["modern living room", "minimal lounge", "outdoor terrace", "grand salon seating"],
+  "cozy-home-cafe": ["living room couch", "bedroom scene", "window-only landscape", "coffee table lounge"],
+  "japanese-simple-table": ["western lounge", "sofa living room", "garden patio", "scenic window room"]
 };
+
+function productPlacementDirective(product: ProductAnalysis): string {
+  const descriptor = [
+    product.category,
+    product.categoryLabel,
+    product.visualSummary,
+    product.materialNotes,
+    product.detectedTags.join(" ")
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  if (/(tray|쟁반|트레이|plate|접시)/.test(descriptor)) {
+    return "empty dining tabletop seen clearly from a gentle top-front angle, broad flat placement area, object intended to rest fully on the table surface";
+  }
+
+  if (/(bowl|볼)/.test(descriptor)) {
+    return "empty dining tabletop with a placemat or table surface visible, placement area centered on the table, object intended to sit stably on the tabletop";
+  }
+
+  if (/(cup|glass|glassware|컵|유리잔)/.test(descriptor)) {
+    return "empty dining tabletop or coaster area visible in the lower foreground, placement zone near the front-center of the table, object intended to stand upright on the table surface";
+  }
+
+  if (/(cutlery|fork|knife|spoon|커트러리|포크|나이프|수저)/.test(descriptor)) {
+    return "empty dining tabletop with a horizontal setting area, object intended to rest flat on the table surface near a place setting";
+  }
+
+  return "empty dining tabletop clearly visible in the lower foreground, object intended to rest on the table surface";
+}
 
 const COPY_SCHEMA = JSON.stringify(
   {
@@ -200,16 +237,19 @@ function buildNegativePrompt(style: StylePreset, product: ProductAnalysis): stri
 
 function buildRepresentativePrompt(style: StylePreset, product: ProductAnalysis): string {
   return [
-    `premium ecommerce background scene for ${promptCategory(product)}`,
+    `premium ecommerce kitchen tabletop background for ${promptCategory(product)}`,
     promptProductDescriptor(product),
     kitchenSceneDirective(style),
+    productPlacementDirective(product),
     style.promptKeywords.join(", "),
     "single kitchen or dining space only",
-    "clean empty placement area on the table",
-    "tabletop visible in lower foreground",
+    "kitchen cabinetry or dining details kept secondary",
+    "clean empty placement area on the dining table",
+    "tabletop dominates the lower half of the frame",
     "single setup only",
     "do not render the product itself",
     "no duplicate object",
+    "camera focused on the table surface, not the room",
     "centered composition",
     "clean commercial lighting",
     "background only for later product compositing",
@@ -220,16 +260,18 @@ function buildRepresentativePrompt(style: StylePreset, product: ProductAnalysis)
 
 function buildLifestylePrompt(style: StylePreset, product: ProductAnalysis): string {
   return [
-    `lifestyle background scene for ${promptCategory(product)}`,
+    `lifestyle kitchen-dining background scene for ${promptCategory(product)}`,
     promptProductDescriptor(product),
     kitchenSceneDirective(style),
+    productPlacementDirective(product),
     style.promptKeywords.join(", "),
     "single kitchen or dining space only",
     "clean placement area reserved on the dining table",
-    "tabletop visible in lower foreground",
+    "tabletop clearly visible in the lower foreground",
+    "kitchen or dining table is the hero surface",
     "do not render the product itself",
     "no duplicate object",
-    "natural perspective",
+    "natural dining-table perspective",
     "props secondary",
     "background only for later product compositing",
     "realistic table depth",
@@ -271,19 +313,13 @@ function buildCopyPrompt(style: StylePreset, product: ProductAnalysis): string {
 export function buildPromptBundle(
   style: StylePreset,
   product: ProductAnalysis,
-  regenerateCount: number
+  _regenerateCount: number
 ): PromptBundle {
-  const seed = hashString(`${product.uploadToken}:${style.id}:${regenerateCount}`);
-  const [first, second, third] = seededAspectRatios(seed);
-
   return {
-    representative: [
-      { aspectRatio: first, prompt: buildRepresentativePrompt(style, product) },
-      { aspectRatio: second, prompt: buildRepresentativePrompt(style, product) }
-    ],
+    representative: [{ aspectRatio: "1:1", prompt: buildRepresentativePrompt(style, product) }],
     lifestyle: [
-      { aspectRatio: second, prompt: buildLifestylePrompt(style, product) },
-      { aspectRatio: third, prompt: buildLifestylePrompt(style, product) }
+      { aspectRatio: "4:5", prompt: buildLifestylePrompt(style, product) },
+      { aspectRatio: "9:16", prompt: buildLifestylePrompt(style, product) }
     ],
     negativePrompt: buildNegativePrompt(style, product),
     copyPrompt: buildCopyPrompt(style, product),

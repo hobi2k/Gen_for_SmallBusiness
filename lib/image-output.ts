@@ -11,7 +11,7 @@ import {
   PromptBundle,
   StyleId
 } from "@/lib/types";
-import { hashString, seededAspectRatios } from "@/lib/utils";
+import { hashString } from "@/lib/utils";
 
 function canvasSize(aspectRatio: GeneratedImage["aspectRatio"]): { width: number; height: number } {
   switch (aspectRatio) {
@@ -146,26 +146,23 @@ function createPlaceholderImages({
   regenerateCount: number;
 }) {
   const seedBase = hashString(`${product.uploadToken}:${styleId}:${regenerateCount}`);
-  const ratios = seededAspectRatios(seedBase);
-
-  const representativeImages = ratios.slice(0, 2).map((aspectRatio, index) => {
-    const seed = seedBase + index;
-    return {
-      id: `rep_${seed}`,
+  const representativeImages = [
+    {
+      id: `rep_${seedBase}`,
       kind: "representative" as const,
-      aspectRatio,
-      seed,
+      aspectRatio: "1:1" as const,
+      seed: seedBase,
       url: buildPlaceholderUrl({
         styleId,
         category: product.category,
-        aspectRatio,
+        aspectRatio: "1:1",
         kind: "representative",
-        seed
+        seed: seedBase
       })
-    };
-  });
+    }
+  ];
 
-  const lifestyleImages = ratios.slice(1, 3).map((aspectRatio, index) => {
+  const lifestyleImages = (["4:5", "9:16"] as const).map((aspectRatio, index) => {
     const seed = seedBase + index + 10;
     return {
       id: `life_${seed}`,
