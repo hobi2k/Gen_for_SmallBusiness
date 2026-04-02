@@ -42,7 +42,7 @@ export async function GET(request: Request) {
       status: 200,
       headers: {
         "Content-Type": inferStorageMimeType(asset.fileName),
-        "Cache-Control": "public, max-age=3600, stale-while-revalidate=86400"
+        "Cache-Control": "no-store"
       }
     });
   } catch (error) {
@@ -62,7 +62,7 @@ export async function GET(request: Request) {
             status: 200,
             headers: {
               "Content-Type": contentType,
-              "Cache-Control": "public, max-age=3600, stale-while-revalidate=86400"
+              "Cache-Control": "no-store"
             }
           });
         }

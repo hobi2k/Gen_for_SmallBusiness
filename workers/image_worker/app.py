@@ -996,15 +996,6 @@ def generate(payload: GenerateRequest, authorization: Optional[str] = Header(def
             (width, height),
             method=Image.Resampling.LANCZOS,
         )
-        seed = _deterministic_seed(
-            payload.upload_token,
-            payload.style_id,
-            kind,
-            index,
-            payload.regenerate_count,
-            RUNTIME_CONFIG["profile"],
-        ) % (2**31)
-        generator = _build_generator(torch, seed)
         background_only_prompt = ", ".join(
             [
                 prompt_variant.prompt,
@@ -1022,8 +1013,22 @@ def generate(payload: GenerateRequest, authorization: Optional[str] = Header(def
             for part in [negative_prompt, _product_negative_terms(payload.product)]
             if part
         )
+        prompt_signature = _deterministic_seed(
+            prompt_variant.prompt,
+            background_negative_prompt,
+            prompt_variant.aspect_ratio,
+        )
         control_scale = 0.0
-
+        seed = _deterministic_seed(
+            payload.upload_token,
+            payload.style_id,
+            kind,
+            index,
+            payload.regenerate_count,
+            RUNTIME_CONFIG["profile"],
+            prompt_signature,
+        ) % (2**31)
+        generator = _build_generator(torch, seed)
         try:
             with _INFERENCE_LOCK:
                 _reset_scheduler(pipeline)
