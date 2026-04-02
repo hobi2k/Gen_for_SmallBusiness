@@ -40,30 +40,6 @@ const KITCHEN_DOMAIN_NEGATIVE_TERMS = [
   "coffee table living room"
 ] as const;
 
-const STYLE_SCENE_DIRECTIVES: Record<StylePreset["id"], string> = {
-  "modern-minimal":
-    "minimal modern kitchen-dining interior, matte island or dining table surface filling the lower frame, subtle cabinetry in background",
-  "natural-wood":
-    "warm wooden kitchen-dining interior, natural wood dining table surface dominant in foreground, calm kitchen shelves softly behind",
-  "nordic-light":
-    "bright nordic kitchen dining space, light wood dining table surface dominant in foreground, airy kitchen daylight with restrained cabinets",
-  "french-vintage":
-    "french vintage kitchen dining table, classic cabinetry and subtle floral accents behind, elegant tabletop scene in foreground",
-  "cozy-home-cafe":
-    "cozy kitchen home-cafe dining corner, warm tabletop in foreground, coffee-ready kitchen shelving softly behind",
-  "japanese-simple-table":
-    "calm japanese kitchen dining table, simple tabletop dominant in foreground, restrained kitchen joinery in background"
-};
-
-const STYLE_NEGATIVE_TERMS: Record<StylePreset["id"], string[]> = {
-  "modern-minimal": ["ornate lounge decor", "sofa set", "busy living room", "decorative salon"],
-  "natural-wood": ["hotel lobby", "marble living room", "industrial office", "window-view lounge"],
-  "nordic-light": ["dark lounge", "velvet sofa", "bar counter", "living room seating area"],
-  "french-vintage": ["modern living room", "minimal lounge", "outdoor terrace", "grand salon seating"],
-  "cozy-home-cafe": ["living room couch", "bedroom scene", "window-only landscape", "coffee table lounge"],
-  "japanese-simple-table": ["western lounge", "sofa living room", "garden patio", "scenic window room"]
-};
-
 function productPlacementDirective(product: ProductAnalysis): string {
   const descriptor = [
     product.category,
@@ -185,7 +161,12 @@ function promptProductDescriptor(product: ProductAnalysis): string {
 }
 
 function kitchenSceneDirective(style: StylePreset): string {
-  return STYLE_SCENE_DIRECTIVES[style.id];
+  return [
+    style.sceneProfile.spaceType,
+    style.sceneProfile.tableSurface,
+    style.sceneProfile.backgroundElements,
+    style.sceneProfile.composition
+  ].join(", ");
 }
 
 function productNegativeTerms(product: ProductAnalysis): string[] {
@@ -228,7 +209,7 @@ function buildNegativePrompt(style: StylePreset, product: ProductAnalysis): stri
   const terms = [
     ...BASE_NEGATIVE_TERMS,
     ...KITCHEN_DOMAIN_NEGATIVE_TERMS,
-    ...STYLE_NEGATIVE_TERMS[style.id],
+    ...style.sceneProfile.prohibitedElements,
     ...productNegativeTerms(product)
   ];
 
@@ -240,8 +221,11 @@ function buildRepresentativePrompt(style: StylePreset, product: ProductAnalysis)
     `premium ecommerce kitchen tabletop background for ${promptCategory(product)}`,
     promptProductDescriptor(product),
     kitchenSceneDirective(style),
+    `foreground surface detail: ${style.sceneProfile.tableSurface}`,
+    `background styling cues: ${style.sceneProfile.backgroundElements}`,
     productPlacementDirective(product),
     style.promptKeywords.join(", "),
+    `allowed accent props: ${style.sceneProfile.accentProps.join(", ")}`,
     "single kitchen or dining space only",
     "kitchen cabinetry or dining details kept secondary",
     "clean empty placement area on the dining table",
@@ -263,8 +247,11 @@ function buildLifestylePrompt(style: StylePreset, product: ProductAnalysis): str
     `lifestyle kitchen-dining background scene for ${promptCategory(product)}`,
     promptProductDescriptor(product),
     kitchenSceneDirective(style),
+    `foreground surface detail: ${style.sceneProfile.tableSurface}`,
+    `background styling cues: ${style.sceneProfile.backgroundElements}`,
     productPlacementDirective(product),
     style.promptKeywords.join(", "),
+    `allowed accent props: ${style.sceneProfile.accentProps.join(", ")}`,
     "single kitchen or dining space only",
     "clean placement area reserved on the dining table",
     "tabletop clearly visible in the lower foreground",

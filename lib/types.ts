@@ -86,6 +86,15 @@ export const EMPTY_PRODUCT_INPUT_OVERRIDES: ProductInputOverrides = {
   visualSummary: null
 };
 
+export interface StyleSceneProfile {
+  spaceType: string;
+  tableSurface: string;
+  backgroundElements: string;
+  accentProps: string[];
+  composition: string;
+  prohibitedElements: string[];
+}
+
 export interface StylePreset {
   id: StyleId;
   name: string;
@@ -98,6 +107,7 @@ export interface StylePreset {
   copyTone: string;
   palette: [string, string, string];
   fitSignals: ProductCategory[];
+  sceneProfile: StyleSceneProfile;
 }
 
 export interface StyleScoreBreakdown {

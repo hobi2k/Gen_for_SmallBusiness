@@ -298,6 +298,45 @@ def _make_blank_condition(size: tuple[int, int]):
     return Image.new("RGB", size, (0, 0, 0))
 
 
+def _make_style_only_reference(image, size: tuple[int, int]):
+    from PIL import Image, ImageEnhance, ImageFilter
+
+    source = image.convert("RGB")
+    width, height = source.size
+    tile_width = max(96, size[0] // 2)
+    tile_height = max(96, size[1] // 2)
+    patch_width = max(96, int(width * 0.42))
+    patch_height = max(96, int(height * 0.42))
+
+    crop_boxes = [
+        (0, 0),
+        (max(0, width - patch_width), 0),
+        (0, max(0, height - patch_height)),
+        (max(0, width - patch_width), max(0, height - patch_height)),
+    ]
+
+    card = Image.new("RGB", size, (236, 231, 223))
+
+    for index, (left, top) in enumerate(crop_boxes):
+        crop = source.crop((left, top, left + patch_width, top + patch_height))
+        patch = crop.resize((tile_width, tile_height), Image.Resampling.LANCZOS)
+        patch = patch.filter(ImageFilter.GaussianBlur(radius=max(12, int(min(size) * 0.016))))
+        patch = patch.resize(
+            (max(56, tile_width // 7), max(56, tile_height // 7)),
+            Image.Resampling.BICUBIC,
+        ).resize((tile_width, tile_height), Image.Resampling.BICUBIC)
+        patch = ImageEnhance.Color(patch).enhance(1.05)
+        patch = ImageEnhance.Contrast(patch).enhance(0.94)
+        x = 0 if index % 2 == 0 else size[0] - tile_width
+        y = 0 if index < 2 else size[1] - tile_height
+        card.paste(patch, (x, y))
+
+    card = card.filter(ImageFilter.GaussianBlur(radius=max(10, int(min(size) * 0.012))))
+    card = ImageEnhance.Color(card).enhance(1.03)
+    card = ImageEnhance.Contrast(card).enhance(0.97)
+    return card
+
+
 def _load_cutout_session():
     global _CUTOUT_SESSION
 
@@ -919,6 +958,12 @@ def _effective_guidance_scale() -> float:
     return min(configured_scale, 4.0) if EFFECTIVE_DEVICE == "cpu" else configured_scale
 
 
+def _effective_ip_adapter_scale() -> float:
+    configured_scale = float(RUNTIME_CONFIG["ip_scale"])
+    style_only_scale = configured_scale * 0.62
+    return min(style_only_scale, 0.42) if EFFECTIVE_DEVICE == "cpu" else min(style_only_scale, 0.48)
+
+
 def _engine_name() -> str:
     if EFFECTIVE_DEVICE == "cpu":
         return "sd15-controlnet-cpu-lite-worker"
@@ -978,7 +1023,7 @@ def _load_pipeline():
                     subfolder=ip_adapter_subfolder,
                     weight_name=str(RUNTIME_CONFIG["ip_adapter_weight"]),
                 )
-                pipeline.set_ip_adapter_scale(float(RUNTIME_CONFIG["ip_scale"]))
+                pipeline.set_ip_adapter_scale(_effective_ip_adapter_scale())
 
             if hasattr(pipeline, "enable_vae_slicing"):
                 pipeline.enable_vae_slicing()
@@ -1115,10 +1160,9 @@ def generate(payload: GenerateRequest, authorization: Optional[str] = Header(def
     def run_variant(kind: Literal["representative", "lifestyle"], index: int, prompt_variant: PromptVariantPayload):
         width, height = _target_size(prompt_variant.aspect_ratio)
         control_image = _make_blank_condition((width, height))
-        style_image = ImageOps.fit(
+        style_image = _make_style_only_reference(
             style_reference_images[(index + payload.regenerate_count) % len(style_reference_images)],
             (width, height),
-            method=Image.Resampling.LANCZOS,
         )
         background_only_prompt = ", ".join(
             [
