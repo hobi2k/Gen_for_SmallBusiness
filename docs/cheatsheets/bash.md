@@ -18,12 +18,12 @@ touch .env.example
 
 ## 4. 환경변수
 ```bash
-export UV_CACHE_DIR=/tmp/uv-cache
+export UV_CACHE_DIR=.uv-cache
 ```
 
 한 줄에서만 쓰기:
 ```bash
-UV_CACHE_DIR=/tmp/uv-cache uv venv --python 3.11
+UV_CACHE_DIR=.uv-cache uv venv --python 3.11
 ```
 
 ## 5. 스크립트 기본 구조

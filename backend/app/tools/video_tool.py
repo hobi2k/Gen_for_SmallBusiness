@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from functools import lru_cache
+import logging
 from pathlib import Path
+
+from PIL import Image, ImageOps
 
 from backend.app.schemas.project import ProjectCreateRequest
 from backend.app.tools.runtime_support import (
@@ -15,6 +18,8 @@ from backend.app.tools.runtime_support import (
     require_real_generation,
     run_ffmpeg,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def select_key_visual(
@@ -117,6 +122,136 @@ def release_video_pipelines() -> None:
         pass
 
 
+def _pick_target_fps(payload: ProjectCreateRequest) -> int:
+    """
+    요청에 맞는 목표 프레임 수를 고른다.
+
+    Args:
+        payload: 프로젝트 생성 요청 데이터
+
+    Returns:
+        사용할 fps
+    """
+
+    return payload.video_fps
+
+
+def _pick_segment_seconds(payload: ProjectCreateRequest) -> int:
+    """
+    요청 크기에 맞는 세그먼트 길이를 정한다.
+
+    Args:
+        payload: 프로젝트 생성 요청 데이터
+
+    Returns:
+        세그먼트 길이(초)
+    """
+
+    request_cost = (
+        payload.video_width
+        * payload.video_height
+        * payload.video_fps
+        * payload.video_inference_steps
+    )
+    if request_cost >= 350_000_000:
+        return 2
+    if request_cost >= 220_000_000:
+        return 3
+    if request_cost >= 120_000_000:
+        return 4
+    return 5
+
+
+def _build_segment_durations(payload: ProjectCreateRequest) -> list[int]:
+    """
+    긴 영상을 여러 구간으로 나눌 길이 목록을 만든다.
+
+    Args:
+        payload: 프로젝트 생성 요청 데이터
+
+    Returns:
+        구간 길이 목록
+    """
+
+    durations: list[int] = []
+    remaining = payload.video_duration_seconds
+    segment_seconds = _pick_segment_seconds(payload)
+    while remaining > 0:
+        current = min(segment_seconds, remaining)
+        durations.append(current)
+        remaining -= current
+    return durations
+
+
+def _prepare_video_key_visual(key_visual_path: str, width: int, height: int) -> Image.Image:
+    """
+    요청된 영상 해상도에 맞는 대표 이미지를 만든다.
+
+    Args:
+        key_visual_path: 대표 이미지 경로
+
+    Returns:
+        요청 해상도에 맞춘 이미지
+    """
+
+    source = Image.open(key_visual_path).convert("RGB")
+    return ImageOps.fit(
+        source,
+        (width, height),
+        method=Image.Resampling.LANCZOS,
+    )
+
+
+def _export_segment_videos(segment_paths: list[Path], output_path: Path) -> str:
+    """
+    구간 영상을 하나의 최종 영상으로 합친다.
+
+    Args:
+        segment_paths: 구간 영상 경로 목록
+        output_path: 최종 저장 경로
+
+    Returns:
+        합쳐진 영상 경로
+    """
+
+    if len(segment_paths) == 1:
+        logger.info("영상 세그먼트가 1개라 바로 최종 파일로 이동합니다: %s", segment_paths[0].name)
+        segment_paths[0].replace(output_path)
+        logger.info("최종 영상 파일 이동 완료: %s", output_path)
+        return str(output_path)
+
+    concat_file = output_path.with_name("video_segments.txt")
+    logger.info("영상 세그먼트 %s개를 하나로 합칩니다.", len(segment_paths))
+    concat_file.write_text(
+        "\n".join(f"file '{path}'" for path in segment_paths),
+        encoding="utf-8",
+    )
+    run_ffmpeg(
+        [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(concat_file),
+            "-an",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "medium",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
+            str(output_path),
+        ],
+    )
+    logger.info("영상 세그먼트 합치기 완료: %s", output_path)
+    return str(output_path)
+
+
 def _try_generate_with_wan(
     output_path: Path,
     payload: ProjectCreateRequest,
@@ -142,12 +277,26 @@ def _try_generate_with_wan(
         return None
 
     try:
-        from diffusers.utils import export_to_video, load_image
+        from diffusers.utils import export_to_video
 
+        logger.info(
+            "Wan 영상 생성을 시작합니다. 길이=%s초, 해상도=%sx%s, fps=%s, steps=%s",
+            payload.video_duration_seconds,
+            payload.video_width,
+            payload.video_height,
+            payload.video_fps,
+            payload.video_inference_steps,
+        )
         if key_visual_path:
+            logger.info("입력 이미지를 사용한 i2v 경로로 진행합니다: %s", key_visual_path)
             pipe = _get_wan_i2v_pipeline()
-            source_image = load_image(key_visual_path).resize((832, 480))
+            source_image = _prepare_video_key_visual(
+                key_visual_path,
+                payload.video_width,
+                payload.video_height,
+            )
         else:
+            logger.info("입력 이미지 없이 t2v 경로로 진행합니다.")
             pipe = _get_wan_t2v_pipeline()
             source_image = None
         prompt = str(copy_bundle["video_script"])
@@ -155,22 +304,88 @@ def _try_generate_with_wan(
             "overexposed, static, blurry details, subtitle, low quality, jpeg artifacts, "
             "ugly, deformed hands, deformed face, fused fingers, crowded background"
         )
-        call_kwargs = {
-            "prompt": prompt,
-            "negative_prompt": negative_prompt,
-            "height": 480,
-            "width": 832,
-            "num_frames": payload.video_duration_seconds * 8 + 1,
-            "guidance_scale": 5.0,
-            "num_inference_steps": 8,
-        }
-        if source_image is not None:
-            call_kwargs["image"] = source_image
+        target_fps = _pick_target_fps(payload)
+        segment_paths: list[Path] = []
+        segment_durations = _build_segment_durations(payload)
+        total_segments = len(segment_durations)
+        logger.info(
+            "총 %s개 세그먼트로 나눠 생성합니다: %s (세그먼트 기준 %s초)",
+            total_segments,
+            segment_durations,
+            _pick_segment_seconds(payload),
+        )
 
-        output = pipe(**call_kwargs).frames[0]
-        export_to_video(output, str(output_path), fps=8)
-        return str(output_path)
+        for index, segment_duration in enumerate(segment_durations, start=1):
+            progress_start = int(((index - 1) / total_segments) * 100)
+            progress_end = int((index / total_segments) * 100)
+            logger.info(
+                "영상 세그먼트 %s/%s 생성 시작 (%s%% -> %s%%), 길이=%s초",
+                index,
+                total_segments,
+                progress_start,
+                progress_end,
+                segment_duration,
+            )
+            call_kwargs = {
+                "prompt": (
+                    f"{prompt}\n"
+                    f"segment {index}/{total_segments}, maintain the same product and style, "
+                    "vertical short-form ad, no subtitles burned into image."
+                ),
+                "negative_prompt": negative_prompt,
+                "height": payload.video_height,
+                "width": payload.video_width,
+                "num_frames": segment_duration * target_fps + 1,
+                "guidance_scale": 6.0,
+                "num_inference_steps": payload.video_inference_steps,
+            }
+            if source_image is not None:
+                call_kwargs["image"] = source_image
+
+            logger.info(
+                "영상 세그먼트 %s/%s Wan 호출 시작: 해상도=%sx%s, fps=%s, frames=%s, steps=%s",
+                index,
+                total_segments,
+                payload.video_width,
+                payload.video_height,
+                target_fps,
+                call_kwargs["num_frames"],
+                payload.video_inference_steps,
+            )
+            output = pipe(**call_kwargs).frames[0]
+            logger.info(
+                "영상 세그먼트 %s/%s Wan 호출 반환: 프레임 수=%s",
+                index,
+                total_segments,
+                len(output),
+            )
+            segment_path = output_path.with_name(f"{output_path.stem}_part_{index}.mp4")
+            logger.info(
+                "영상 세그먼트 %s/%s mp4 저장 시작: %s",
+                index,
+                total_segments,
+                segment_path.name,
+            )
+            export_to_video(output, str(segment_path), fps=target_fps)
+            logger.info(
+                "영상 세그먼트 %s/%s mp4 저장 완료: %s",
+                index,
+                total_segments,
+                segment_path.name,
+            )
+            segment_paths.append(segment_path)
+            logger.info(
+                "영상 세그먼트 %s/%s 생성 완료: %s",
+                index,
+                total_segments,
+                segment_path.name,
+            )
+
+        final_path = _export_segment_videos(segment_paths, output_path)
+        logger.info("Wan 영상 생성 완료: %s", final_path)
+        return final_path
     except Exception as exc:
+        logger.exception("Wan 영상 생성 중 오류가 발생했습니다.")
         if require_real_generation():
             raise RuntimeError("Wan 영상 생성에 실패했습니다.") from exc
         return None
@@ -204,9 +419,9 @@ def _ensure_visual_source(
             output_path=fallback_path,
             title=payload.product_name,
             subtitle=str(copy_bundle["video_script"]),
-            badges=payload.selling_points[:2] or [payload.summary],
-            width=1280,
-            height=720,
+            badges=[payload.prompt],
+            width=payload.video_width,
+            height=payload.video_height,
             tone=payload.tone,
         ),
     )
@@ -233,9 +448,11 @@ def generate_short_video(
 
     root = ensure_project_root(project_id)
     output_path = root / "video_raw.mp4"
+    logger.info("프로젝트 %s 영상 생성을 시작합니다. 출력 경로=%s", project_id, output_path)
 
     generated_path = _try_generate_with_wan(output_path, payload, key_visual_path, copy_bundle)
     if generated_path is not None:
+        logger.info("프로젝트 %s 영상 생성이 실제 모델 경로로 완료됐습니다.", project_id)
         return generated_path
 
     if require_real_generation():
@@ -243,8 +460,8 @@ def generate_short_video(
 
     visual_source = _ensure_visual_source(root, payload, key_visual_path, copy_bundle)
 
-    # 로컬 모델이 없더라도 바로 시연 가능한 결과물을 만들기 위해
-    # 대표 이미지를 6초짜리 간단한 광고 컷으로 변환한다.
+    target_fps = _pick_target_fps(payload)
+    logger.info("실제 모델 경로를 쓰지 못해 ffmpeg 기반 정적 영상 경로로 전환합니다.")
     run_ffmpeg(
         [
             "ffmpeg",
@@ -256,14 +473,21 @@ def generate_short_video(
             "-t",
             str(payload.video_duration_seconds),
             "-vf",
-            "scale=1280:720:force_original_aspect_ratio=decrease,"
-            "pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=white,"
-            f"zoompan=z='min(zoom+0.0008,1.08)':d={payload.video_duration_seconds * 24}:s=1280x720",
+            (
+                f"scale={payload.video_width}:{payload.video_height}:"
+                "force_original_aspect_ratio=increase,"
+                f"crop={payload.video_width}:{payload.video_height},"
+                "zoompan="
+                f"z='min(zoom+0.0007,1.08)':"
+                f"d={payload.video_duration_seconds * target_fps}:"
+                f"s={payload.video_width}x{payload.video_height}"
+            ),
             "-r",
-            "24",
+            str(target_fps),
             "-pix_fmt",
             "yuv420p",
             str(output_path),
         ],
     )
+    logger.info("프로젝트 %s 정적 영상 생성이 완료됐습니다: %s", project_id, output_path)
     return str(output_path)

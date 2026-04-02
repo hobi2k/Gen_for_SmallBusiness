@@ -5,6 +5,7 @@ from io import BytesIO
 from fastapi.testclient import TestClient
 from PIL import Image
 
+from backend.app.api import generation as generation_api
 from backend.app.main import app
 
 
@@ -24,6 +25,12 @@ def _build_payload() -> dict[str, str]:
         "keywords": "수제, 선물",
         "selling_points": "과육이 살아 있습니다.",
         "tone": "깔끔한 판매형",
+        "banner_width": "1280",
+        "banner_height": "720",
+        "detail_width": "720",
+        "detail_height": "1280",
+        "video_width": "720",
+        "video_height": "1280",
         "video_duration_seconds": "6",
         "include_music": "true",
         "music_language": "ko",
@@ -89,10 +96,21 @@ def test_generate_video_returns_video_assets() -> None:
     assert "final_video" not in data["asset_paths"]
 
 
-def test_generate_video_includes_music_assets_when_enabled() -> None:
+def test_generate_video_includes_music_assets_when_enabled(monkeypatch) -> None:
     """
     영상 전용 생성 API가 음악 포함 상태에서 합성 결과까지 반환하는지 확인한다.
     """
+
+    monkeypatch.setattr(
+        generation_api,
+        "generate_video_asset_bundle",
+        lambda payload: {
+            "project_root": "/tmp/video-api",
+            "video": "/tmp/video.mp4",
+            "music": "/tmp/music.wav",
+            "final_video": "/tmp/final.mp4",
+        },
+    )
 
     with TestClient(app) as client:
         response = client.post(
@@ -109,10 +127,20 @@ def test_generate_video_includes_music_assets_when_enabled() -> None:
     assert "final_video" in data["asset_paths"]
 
 
-def test_generate_music_returns_music_asset() -> None:
+def test_generate_music_returns_music_asset(monkeypatch) -> None:
     """
     음악 전용 생성 API가 음악 자산을 반환하는지 확인한다.
     """
+
+    monkeypatch.setattr(
+        generation_api,
+        "generate_music_asset_bundle",
+        lambda payload: {
+            "project_root": "/tmp/music-api",
+            "music": "/tmp/music.wav",
+            "copy": {"music_vocal_mode": payload.music_vocal_mode},
+        },
+    )
 
     with TestClient(app) as client:
         payload = _build_payload()
@@ -126,3 +154,24 @@ def test_generate_music_returns_music_asset() -> None:
     assert data["mode"] == "music"
     assert "music" in data["asset_paths"]
     assert data["asset_paths"]["copy"]["music_vocal_mode"] == "vocal"
+
+
+def test_generate_image_accepts_custom_image_sizes() -> None:
+    """
+    이미지 전용 생성 API가 사용자 지정 배너·상세 크기를 받아도 처리되는지 확인한다.
+    """
+
+    with TestClient(app) as client:
+        payload = _build_payload()
+        payload["banner_width"] = "1440"
+        payload["banner_height"] = "810"
+        payload["detail_width"] = "900"
+        payload["detail_height"] = "1600"
+        response = client.post(
+            "/generate/image",
+            data=payload,
+            files={"images": _build_upload_file()},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["mode"] == "image"

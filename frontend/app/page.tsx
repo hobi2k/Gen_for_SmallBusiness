@@ -4,6 +4,7 @@ import {ModeCard} from '@/components/mode-card';
 export default function HomePage() {
   return (
     <main className="px-6 py-10 md:px-10 xl:px-16">
+      {/* 첫 화면은 제품 소개와 전용 생성 화면 진입점을 같이 보여준다. */}
       <section className="mx-auto max-w-7xl rounded-[40px] bg-[radial-gradient(circle_at_top_left,_rgba(255,179,107,0.18),_transparent_22%),linear-gradient(135deg,_#111827_0%,_#182638_56%,_#2a1d15_100%)] p-8 text-white shadow-[0_40px_140px_rgba(8,15,26,0.32)] md:p-10">
         <div className="grid gap-8 lg:grid-cols-[1.15fr_0.85fr] lg:items-center">
           <div>
@@ -15,6 +16,7 @@ export default function HomePage() {
             </p>
           </div>
 
+          {/* 채팅이 아닌 전용 생성 화면으로 바로 들어가고 싶을 때 쓰는 링크 카드다. */}
           <div className="grid gap-3">
             <ModeCard href="/image" title="이미지 생성" description="배너, 상세 이미지, 로고 초안" />
             <ModeCard href="/video" title="영상 생성" description="짧은 광고 영상과 선택형 음악" />
@@ -25,6 +27,7 @@ export default function HomePage() {
 
       <section className="mx-auto mt-8 max-w-7xl">
         <div className="rounded-[40px] bg-white/88 p-3 shadow-[0_24px_80px_rgba(15,23,32,0.08)] backdrop-blur">
+          {/* 실제 대화, 업로드, 결과 미리보기는 이 컴포넌트 안에서 처리한다. */}
           <ChatPanel />
         </div>
       </section>

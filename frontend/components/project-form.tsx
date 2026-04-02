@@ -3,9 +3,11 @@
 import {FormEvent, useState} from 'react';
 
 const toneOptions = ['깔끔한 판매형', '따뜻한 공감형', '밝은 행사형', '고급스러운 브랜드형'];
+// 이 파일은 초기 프로젝트 생성 실험용 폼이다. 현재 메인 진입점은 chat-panel / generation-form 쪽이다.
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://127.0.0.1:8000';
 
 export function ProjectForm() {
+  // 전송 상태와 단일 안내 문구만 관리하는 단순 폼이다.
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [message, setMessage] = useState('');
 
@@ -15,25 +17,17 @@ export function ProjectForm() {
     setMessage('생성 요청을 보내는 중입니다.');
 
     const formData = new FormData(event.currentTarget);
+    // 이 폼은 JSON API를 치므로 File 자체는 보내지 않고 문자열 필드만 묶는다.
     const payload = {
-      category: String(formData.get('category') ?? ''),
       product_name: String(formData.get('product_name') ?? ''),
-      summary: String(formData.get('summary') ?? ''),
-      description: String(formData.get('description') ?? ''),
-      keywords: String(formData.get('keywords') ?? '')
-        .split(',')
-        .map((item) => item.trim())
-        .filter(Boolean),
-      selling_points: String(formData.get('selling_points') ?? '')
-        .split(',')
-        .map((item) => item.trim())
-        .filter(Boolean),
+      prompt: String(formData.get('prompt') ?? ''),
       tone: String(formData.get('tone') ?? toneOptions[0]),
-      video_duration_seconds: Number(formData.get('video_duration_seconds') ?? 6),
+      video_duration_seconds: Number(formData.get('video_duration_seconds') ?? 15),
       image_paths: [],
     };
 
     try {
+      // 이 파일은 구형 구조라 Next.js 프록시가 아니라 직접 백엔드를 호출한다.
       const response = await fetch(`${apiBaseUrl}/projects`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -56,30 +50,12 @@ export function ProjectForm() {
   return (
     <form className="grid gap-4 rounded-[32px] border border-black/10 bg-white p-8 shadow-lg" onSubmit={handleSubmit}>
       <div>
-        <label className="text-sm font-medium text-black/80">업종</label>
-        <input className="mt-2 w-full rounded-2xl border border-black/10 px-4 py-3" name="category" placeholder="예: 식품" required />
-      </div>
-      <div>
         <label className="text-sm font-medium text-black/80">상품명</label>
         <input className="mt-2 w-full rounded-2xl border border-black/10 px-4 py-3" name="product_name" placeholder="예: 수제 딸기잼" required />
       </div>
       <div>
-        <label className="text-sm font-medium text-black/80">한 줄 소개</label>
-        <textarea className="mt-2 h-20 w-full rounded-2xl border border-black/10 px-4 py-3" name="summary" placeholder="상품을 한 문장으로 소개해 주세요" required />
-      </div>
-      <div>
-        <label className="text-sm font-medium text-black/80">상세 설명</label>
-        <textarea className="mt-2 h-28 w-full rounded-2xl border border-black/10 px-4 py-3" name="description" placeholder="상세 페이지 상단에 담고 싶은 설명을 적어 주세요" required />
-      </div>
-      <div className="grid gap-4 md:grid-cols-2">
-        <div>
-          <label className="text-sm font-medium text-black/80">핵심 키워드</label>
-          <input className="mt-2 w-full rounded-2xl border border-black/10 px-4 py-3" name="keywords" placeholder="예: 수제, 딸기, 선물" />
-        </div>
-        <div>
-          <label className="text-sm font-medium text-black/80">강조할 판매 포인트</label>
-          <input className="mt-2 w-full rounded-2xl border border-black/10 px-4 py-3" name="selling_points" placeholder="예: 과육이 살아 있음, 당도 조절" />
-        </div>
+        <label className="text-sm font-medium text-black/80">생성 프롬프트</label>
+        <textarea className="mt-2 h-20 w-full rounded-2xl border border-black/10 px-4 py-3" name="prompt" placeholder="원하는 결과를 한 문장으로 적어 주세요" required />
       </div>
       <div>
         <label className="text-sm font-medium text-black/80">분위기</label>
@@ -93,14 +69,14 @@ export function ProjectForm() {
         <label className="text-sm font-medium text-black/80">영상 길이</label>
         <input
           className="mt-2 w-full rounded-2xl border border-black/10 px-4 py-3"
-          defaultValue={6}
-          max={10}
-          min={3}
+          defaultValue={15}
+          max={40}
+          min={1}
           name="video_duration_seconds"
           required
           type="number"
         />
-        <p className="mt-2 text-xs text-black/45">3초부터 10초 사이로 고를 수 있습니다.</p>
+        <p className="mt-2 text-xs text-black/45">1초부터 40초 사이로 고를 수 있습니다.</p>
       </div>
       <div>
         <label className="text-sm font-medium text-black/80">상품 사진</label>

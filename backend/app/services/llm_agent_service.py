@@ -73,20 +73,8 @@ def _chat_tool_schemas() -> list[dict[str, object]]:
     """
 
     shared_properties: dict[str, object] = {
-        "category": {"type": "string", "description": "업종"},
         "product_name": {"type": "string", "description": "상품명"},
-        "summary": {"type": "string", "description": "한 줄 소개"},
-        "description": {"type": "string", "description": "상세 설명"},
-        "keywords": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "핵심 키워드 목록",
-        },
-        "selling_points": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "판매 포인트 목록",
-        },
+        "prompt": {"type": "string", "description": "생성 프롬프트"},
         "tone": {
             "type": "string",
             "enum": ["깔끔한 판매형", "따뜻한 공감형", "밝은 행사형", "고급스러운 브랜드형"],
@@ -97,12 +85,51 @@ def _chat_tool_schemas() -> list[dict[str, object]]:
             "description": "실행 전 사용자에게 보여줄 짧은 안내",
         },
     }
+    image_size_properties: dict[str, object] = {
+        "banner_width": {
+            "type": "integer",
+            "minimum": 256,
+            "maximum": 2048,
+            "description": "가로 배너 너비",
+        },
+        "banner_height": {
+            "type": "integer",
+            "minimum": 256,
+            "maximum": 2048,
+            "description": "가로 배너 높이",
+        },
+        "detail_width": {
+            "type": "integer",
+            "minimum": 256,
+            "maximum": 2048,
+            "description": "세로 상세 이미지 너비",
+        },
+        "detail_height": {
+            "type": "integer",
+            "minimum": 256,
+            "maximum": 2048,
+            "description": "세로 상세 이미지 높이",
+        },
+    }
     video_properties: dict[str, object] = {
         **shared_properties,
+        **image_size_properties,
+        "video_width": {
+            "type": "integer",
+            "minimum": 256,
+            "maximum": 2048,
+            "description": "영상 너비",
+        },
+        "video_height": {
+            "type": "integer",
+            "minimum": 256,
+            "maximum": 2048,
+            "description": "영상 높이",
+        },
         "video_duration_seconds": {
             "type": "integer",
-            "minimum": 3,
-            "maximum": 10,
+            "minimum": 1,
+            "maximum": 40,
             "description": "영상 길이",
         },
         "include_music": {
@@ -121,8 +148,8 @@ def _chat_tool_schemas() -> list[dict[str, object]]:
         **shared_properties,
         "video_duration_seconds": {
             "type": "integer",
-            "minimum": 3,
-            "maximum": 10,
+            "minimum": 1,
+            "maximum": 40,
             "description": "음악 길이",
         },
         "music_language": {"type": "string", "description": "가사 언어"},
@@ -162,12 +189,13 @@ def _chat_tool_schemas() -> list[dict[str, object]]:
                 "description": "이미지 생성이 적절할 때 호출한다.",
                 "parameters": {
                     "type": "object",
-                    "properties": shared_properties,
+                    "properties": {
+                        **shared_properties,
+                        **image_size_properties,
+                    },
                     "required": [
-                        "category",
                         "product_name",
-                        "summary",
-                        "description",
+                        "prompt",
                         "tone",
                         "assistant_message",
                     ],
@@ -184,10 +212,8 @@ def _chat_tool_schemas() -> list[dict[str, object]]:
                     "type": "object",
                     "properties": video_properties,
                     "required": [
-                        "category",
                         "product_name",
-                        "summary",
-                        "description",
+                        "prompt",
                         "tone",
                         "video_duration_seconds",
                         "include_music",
@@ -206,10 +232,8 @@ def _chat_tool_schemas() -> list[dict[str, object]]:
                     "type": "object",
                     "properties": music_properties,
                     "required": [
-                        "category",
                         "product_name",
-                        "summary",
-                        "description",
+                        "prompt",
                         "tone",
                         "video_duration_seconds",
                         "music_language",
@@ -250,8 +274,13 @@ def choose_chat_tool_call(payload: ChatGenerateRequest) -> ChatToolDecision:
 이미지면 generate_image, 영상이면 generate_video, 음악이면 generate_music를 고른다.
 사용자가 명시하지 않은 값은 문맥에 맞게 자연스럽게 보완한다.
 어려운 영어 표현은 쓰지 말고 한국어 중심으로 채운다.
-영상 길이는 3초 이상 10초 이하 정수만 사용한다.
+영상 길이는 1초 이상 40초 이하 정수만 사용한다.
 보컬 방식은 instrumental 또는 vocal만 사용한다.
+해상도도 사용자가 말하면 도구 인자로 채운다.
+채팅에서 해상도를 말하지 않으면 기본값을 유지한다.
+기본값은 배너 1280x720, 상세 이미지 720x1280, 영상 832x480 이다.
+사용자가 쇼츠, 세로, 9:16, 1080x1920 같은 표현을 쓰면 영상 해상도에 반영한다.
+사용자가 배너 크기나 상세 이미지 크기를 따로 말하면 해당 값도 반영한다.
 """.strip(),
             },
             {
@@ -290,6 +319,12 @@ def generate_copy_with_llm(payload: ProjectCreateRequest) -> dict[str, str | lis
 사용자 요청을 바탕으로 광고 문구 묶음을 만든다.
 어려운 영어를 남발하지 말고, 실제 배너/영상/음악 생성에 바로 쓸 수 있게 분명하게 쓴다.
 반드시 JSON만 출력한다.
+보컬 모드가 vocal이면 music_lyrics를 절대 비우지 마라.
+사용자가 가사를 직접 쓰지 않았어도 상품 정보와 톤에 맞춰 새 가사를 만들어라.
+instrumental이면 music_lyrics는 빈 문자열이어도 된다.
+한국어 가사를 만들 때는 발음이 쉬운 짧은 문장을 써라.
+브랜드 이름도 길게 꼬지 말고, 또렷하게 들릴 짧은 구절로 반복해라.
+한 줄이 너무 길지 않게 쓰고, [Verse], [Hook]처럼 구간을 나눠라.
 
 반환 형식:
 {

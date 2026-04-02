@@ -3,6 +3,7 @@ import {GenerationForm} from '@/components/generation-form';
 export default function VideoPage() {
   return (
     <main className="mx-auto max-w-7xl px-6 py-10 md:px-10 xl:px-16">
+      {/* 영상 전용 생성 페이지의 소개 영역이다. */}
       <section className="rounded-[36px] bg-gradient-to-br from-[#111827] via-[#1d2736] to-[#402a1f] p-8 text-white shadow-[0_32px_120px_rgba(17,24,39,0.28)]">
         <h1 className="mt-4 text-4xl font-semibold tracking-[-0.05em]">짧고 선명한 광고 영상을 바로</h1>
         <p className="mt-4 max-w-3xl text-sm leading-7 text-white/72">
@@ -11,6 +12,7 @@ export default function VideoPage() {
       </section>
 
       <div className="mt-8">
+        {/* mode="video"일 때 영상 해상도, 음악 포함 여부 같은 입력이 열린다. */}
         <GenerationForm mode="video" />
       </div>
     </main>

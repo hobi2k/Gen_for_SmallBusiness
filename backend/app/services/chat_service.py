@@ -27,27 +27,6 @@ class ChatAgentState(TypedDict, total=False):
     tool_decision: llm_agent_service.ChatToolDecision
     request: ProjectCreateRequest
     response: ChatGenerateResponse
-
-
-def _merge_text_list(primary: list[str], fallback: object) -> list[str]:
-    """
-    사용자 입력과 모델 도구 인자 중 더 적절한 문자열 목록을 고른다.
-
-    Args:
-        primary: 사용자가 이미 보낸 값
-        fallback: 모델이 도구 인자로 고른 값
-
-    Returns:
-        최종 문자열 목록
-    """
-
-    if primary:
-        return primary
-    if not isinstance(fallback, list):
-        return []
-    return [str(item).strip() for item in fallback if str(item).strip()]
-
-
 def _build_project_request(
     payload: ChatGenerateRequest,
     tool_decision: llm_agent_service.ChatToolDecision,
@@ -64,14 +43,16 @@ def _build_project_request(
     """
 
     arguments = tool_decision.arguments
-    category = str(payload.category or arguments.get("category") or "일반").strip()
     product_name = str(
         payload.product_name or arguments.get("product_name") or "채팅 생성 요청"
     ).strip()
-    summary = str(payload.summary or arguments.get("summary") or payload.message).strip()
-    description = str(
-        payload.description or arguments.get("description") or payload.message
-    ).strip()
+    prompt = str(payload.prompt or arguments.get("prompt") or payload.message).strip()
+    banner_width = int(arguments.get("banner_width", payload.banner_width))
+    banner_height = int(arguments.get("banner_height", payload.banner_height))
+    detail_width = int(arguments.get("detail_width", payload.detail_width))
+    detail_height = int(arguments.get("detail_height", payload.detail_height))
+    video_width = int(arguments.get("video_width", payload.video_width))
+    video_height = int(arguments.get("video_height", payload.video_height))
     video_duration_seconds = int(
         arguments.get("video_duration_seconds", payload.video_duration_seconds)
     )
@@ -82,13 +63,15 @@ def _build_project_request(
         payload.music_vocal_mode or arguments.get("music_vocal_mode") or "instrumental"
     ).strip()
     request = ProjectCreateRequest(
-        category=category,
         product_name=product_name,
-        summary=summary,
-        description=description,
-        keywords=_merge_text_list(payload.keywords, arguments.get("keywords")),
-        selling_points=_merge_text_list(payload.selling_points, arguments.get("selling_points")),
+        prompt=prompt,
         tone=str(payload.tone or arguments.get("tone") or "깔끔한 판매형").strip(),
+        banner_width=banner_width,
+        banner_height=banner_height,
+        detail_width=detail_width,
+        detail_height=detail_height,
+        video_width=video_width,
+        video_height=video_height,
         video_duration_seconds=video_duration_seconds,
         image_paths=payload.image_paths,
         include_music=bool(arguments.get("include_music", payload.include_music)),

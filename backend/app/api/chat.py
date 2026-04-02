@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -11,6 +12,7 @@ from backend.app.services.chat_service import run_chat_generation
 from backend.app.tools.runtime_support import save_uploaded_files
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 async def _read_uploads(files: list[UploadFile]) -> list[tuple[str, bytes]]:
@@ -35,7 +37,7 @@ async def _read_uploads(files: list[UploadFile]) -> list[tuple[str, bytes]]:
 async def _build_chat_payload(
     message: str = Form(...),
     tone: str = Form("깔끔한 판매형"),
-    video_duration_seconds: int = Form(6),
+    video_duration_seconds: int = Form(15),
     include_music: bool = Form(True),
     music_language: str = Form("ko"),
     music_lyrics: str = Form(""),
@@ -78,8 +80,11 @@ def generate_from_chat(
     """
 
     try:
+        logger.info("API /chat/generate 요청 수신")
         return run_chat_generation(payload)
     except ValueError as exc:
+        logger.exception("API /chat/generate 검증 오류")
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
+        logger.exception("API /chat/generate 처리 오류")
         raise HTTPException(status_code=500, detail=str(exc)) from exc

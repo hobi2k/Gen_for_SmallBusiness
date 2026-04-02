@@ -1,7 +1,9 @@
+/* 한글 UI가 깨지지 않게 공통 웹폰트를 먼저 불러온다. */
 @import '@fontsource/noto-sans-kr/400.css';
 @import '@fontsource/noto-sans-kr/500.css';
 @import '@fontsource/noto-sans-kr/700.css';
 
+/* Tailwind 기본 레이어를 순서대로 불러온다. */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -14,6 +16,7 @@ html {
 }
 
 body {
+  /* 전역 배경은 모든 페이지에서 같은 톤을 쓰도록 여기서 한 번 정의한다. */
   margin: 0;
   min-height: 100%;
   background:
@@ -47,6 +50,7 @@ button {
 textarea:focus,
 input:focus,
 select:focus {
+  /* 폼 포커스 색을 프로젝트 전체에서 통일한다. */
   outline: 2px solid rgba(219, 106, 42, 0.18);
   outline-offset: 0;
 }

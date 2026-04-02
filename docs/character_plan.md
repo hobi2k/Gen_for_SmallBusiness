@@ -24,9 +24,16 @@
 
 그래서 이 프로젝트에서는 아래 원칙을 고정한다.
 
-- 모델은 글자가 없는 비주얼 생성만 담당
+- 모델은 제품, 배경, 영어 라벨처럼 상대적으로 안정적인 비주얼 생성만 담당
 - 광고 문구는 후처리 오버레이로만 넣음
 - 글자 정확도는 모델이 아니라 코드에서 보장
+- 영어 라벨은 생성 모델이 만들 수 있게 열어두고, 한국어 카피는 후처리에서만 넣음
+
+현재 이미지 생성 기준:
+- 업로드 이미지가 있으면 광고 포스터형 `img2img`
+- 업로드 이미지가 없으면 광고 포스터형 `text-to-image`
+- 한국어 자체를 프롬프트에서 금지하지 않음
+- 다만 한국어 카피 정확도는 여전히 후처리 오버레이로 보장
 
 ## 3. 구현 원칙
 
@@ -36,7 +43,7 @@
 - 텍스트 정확도는 후처리 단계에서만 해결한다.
 
 ### 3-2. 데이터 원칙
-- 오버레이에 쓰는 문구는 [copy_tool.py](/home/hosung/pytorch-demo/Gen_for_SmallBusiness/backend/app/tools/copy_tool.py) 또는 LLM 카피 생성 결과를 사용한다.
+- 오버레이에 쓰는 문구는 [backend/app/tools/copy_tool.py](../backend/app/tools/copy_tool.py) 또는 LLM 카피 생성 결과를 사용한다.
 - 이미 생성된 `headline`, `subheads`, `detail_headline`, `short_social_copies`를 재활용한다.
 - 이미지용 문구와 영상용 문구는 같은 카피 묶음에서 가져오되, 배치 방식만 다르게 한다.
 
@@ -96,7 +103,8 @@
 ## 5. 영상 오버레이 계획
 
 ### 5-1. 도구
-- `ffmpeg drawtext`
+- `PIL`로 만드는 투명 오버레이 PNG
+- `ffmpeg overlay`
 
 ### 5-2. 적용 대상
 - `video_raw.mp4`
@@ -117,13 +125,12 @@
 - 텍스트가 길면 한 줄이 아니라 두 줄로 나눈다.
 
 ### 5-5. 필요한 구현 함수
-- `escape_drawtext_text()`
-- `build_drawtext_filter()`
+- `build_overlay_layer()`
 - `overlay_text_on_video()`
 - `compose_video_with_music_and_text()`
 
 ### 5-6. 시간축 설계
-- 영상 길이는 현재 `3~10초`
+- 영상 길이는 현재 `1~40초`
 - 길이에 맞춰 문구 수를 자동 조절
 
 예:
@@ -148,12 +155,12 @@
   - `assets/fonts/NotoSansKR-Regular.ttf`
   - `assets/fonts/NotoSansKR-Bold.ttf`
 
-이 경로를 `PIL`과 `ffmpeg drawtext`에서 공통 사용한다.
+이 경로를 `PIL`과 영상 오버레이 합성 단계에서 공통 사용한다.
 
 ## 7. 현재 코드에 붙일 위치
 
 ### 이미지
-- 현재 생성: [image_tool.py](/home/hosung/pytorch-demo/Gen_for_SmallBusiness/backend/app/tools/image_tool.py)
+- 현재 생성: [backend/app/tools/image_tool.py](../backend/app/tools/image_tool.py)
 - 추가 예정:
   - `text_overlay_tool.py` 신설
   - 또는 `image_tool.py` 내부 후처리 함수 추가
@@ -162,14 +169,14 @@
 - 오버레이 로직은 별도 파일 `text_overlay_tool.py` 로 분리
 
 ### 영상
-- 현재 생성: [video_tool.py](/home/hosung/pytorch-demo/Gen_for_SmallBusiness/backend/app/tools/video_tool.py)
-- 현재 합성: [composition_tool.py](/home/hosung/pytorch-demo/Gen_for_SmallBusiness/backend/app/tools/composition_tool.py)
+- 현재 생성: [backend/app/tools/video_tool.py](../backend/app/tools/video_tool.py)
+- 현재 합성: [backend/app/tools/composition_tool.py](../backend/app/tools/composition_tool.py)
 
-추천:
-- 영상 텍스트 오버레이는 `composition_tool.py` 에 붙인다.
-- 이유:
-  - 최종 합성 단계에서 음악과 함께 처리하기 좋음
-  - `video_raw.mp4 -> text_overlay.mp4 -> final_ad.mp4` 흐름이 자연스러움
+현재 구조:
+- 영상 텍스트 오버레이는 [backend/app/tools/text_overlay_tool.py](../backend/app/tools/text_overlay_tool.py) 에서 만든다.
+- 합성은 [backend/app/tools/composition_tool.py](../backend/app/tools/composition_tool.py) 에서 맡는다.
+- 흐름은 `video_raw.mp4 -> video_overlay.mp4 -> final_ad.mp4` 이다.
+- 영상 생성은 품질 우선 `24fps` 기준으로 돌고, 긴 영상은 `5초` 단위 세그먼트로 분할 생성한다.
 
 ## 8. 파일 구조 제안
 
@@ -180,7 +187,7 @@
 - 한글 줄바꿈
 - 폰트 로딩
 - 이미지 텍스트 합성
-- 영상 drawtext 필터 생성
+- 영상 오버레이 PNG 생성과 합성
 
 ## 9. 단계별 구현 순서
 
@@ -199,7 +206,7 @@
 - 줄바꿈, 그림자, 박스 스타일 조정
 
 ### 4단계
-- 영상 drawtext 필터 구현
+- 영상 오버레이 PNG 합성 구현
 - `video_raw.mp4` 위에 제목 1개만 먼저 얹기
 
 ### 5단계

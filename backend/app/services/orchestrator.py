@@ -37,7 +37,6 @@ def run_project_generation(db: Session, payload: ProjectCreateRequest) -> Projec
     project = Project(
         id=str(uuid4()),
         product_name=validated_payload.product_name,
-        category=validated_payload.category,
         tone=validated_payload.tone,
         status="running",
         request_snapshot=request_snapshot,

@@ -11,6 +11,7 @@ const navItems = [
 ];
 
 export function TopNavigation() {
+  // 현재 URL을 읽어서 활성 탭 스타일을 바꾼다.
   const pathname = usePathname();
 
   return (

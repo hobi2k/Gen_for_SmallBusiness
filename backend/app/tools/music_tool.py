@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from functools import lru_cache
+import logging
 from pathlib import Path
+import subprocess
+import sys
 
 from backend.app.schemas.project import ProjectCreateRequest
 from backend.app.tools.runtime_support import (
@@ -13,7 +15,10 @@ from backend.app.tools.runtime_support import (
     get_model_dir,
     get_model_repo_id,
     is_model_downloaded,
+    run_ffmpeg,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _find_ace_step_checkpoint_dir(model_dir: Path) -> Path:
@@ -66,15 +71,16 @@ def _build_music_prompt(payload: ProjectCreateRequest) -> str:
         음악 생성 프롬프트 문자열
     """
 
-    keywords = ", ".join(payload.keywords[:4]) if payload.keywords else payload.category
     vocal_text = (
         "instrumental only"
         if payload.music_vocal_mode == "instrumental"
         else "with vocals"
     )
     return (
-        f"commercial music, {payload.tone}, {payload.product_name}, {payload.category}, "
-        f"{keywords}, {payload.video_duration_seconds} seconds, {vocal_text}, "
+        f"commercial music, {payload.tone}, {payload.product_name}, "
+        f"{payload.prompt}, {payload.video_duration_seconds} seconds, {vocal_text}, "
+        "clear pronunciation, simple memorable melody, "
+        "natural vocal timing, easy syllables, "
         f"{payload.music_language}"
     )
 
@@ -115,25 +121,55 @@ def _validate_music_duration(output_path: str, expected_seconds: int) -> None:
         )
 
 
-@lru_cache(maxsize=1)
-def _get_ace_step_pipeline():
+def _postprocess_music(output_path: Path, expected_seconds: int) -> None:
     """
-    ACE-Step 파이프라인을 한 번만 로드한다.
+    생성된 음악 끝부분을 자연스럽게 정리하고 길이를 목표 길이로 맞춘다.
+
+    Args:
+        output_path: 생성된 wav 경로
+        expected_seconds: 목표 길이
+    """
+
+    actual_duration = get_media_duration(str(output_path))
+    fade_duration = 0.75
+    fade_start = max(min(actual_duration - fade_duration, float(expected_seconds) - fade_duration), 0.0)
+    polished_path = output_path.with_name("music_polished.wav")
+    logger.info(
+        "음악 후처리 시작: 입력=%s, 목표길이=%s초, 실제길이=%.2f초",
+        output_path,
+        expected_seconds,
+        actual_duration,
+    )
+    run_ffmpeg(
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(output_path),
+            "-af",
+            (
+                f"afade=t=out:st={fade_start:.3f}:d={fade_duration:.3f},"
+                f"apad=whole_dur={float(expected_seconds):.3f},"
+                f"atrim=end={float(expected_seconds):.3f}"
+            ),
+            "-c:a",
+            "pcm_s16le",
+            str(polished_path),
+        ],
+    )
+    polished_path.replace(output_path)
+    logger.info("음악 후처리 완료: %s", output_path)
+
+
+def _get_ace_step_worker_path() -> Path:
+    """
+    ACE-Step 서브프로세스 작업 스크립트 경로를 반환한다.
 
     Returns:
-        로드된 ACE-Step 파이프라인
+        작업 스크립트 경로
     """
 
-    from acestep.pipeline_ace_step import ACEStepPipeline
-
-    model_dir = get_model_dir("ace_step")
-    checkpoint_dir = _find_ace_step_checkpoint_dir(model_dir)
-    return ACEStepPipeline(
-        checkpoint_dir=str(checkpoint_dir),
-        dtype="bfloat16",
-        torch_compile=False,
-        cpu_offload=True,
-    )
+    return Path(__file__).with_name("ace_step_worker.py")
 
 
 def _try_generate_with_ace_step(
@@ -160,76 +196,39 @@ def _try_generate_with_ace_step(
         return None
 
     try:
-        import soundfile as sf
-        import torchaudio
-
         output_path = project_root / "music.wav"
-        model_demo = _get_ace_step_pipeline()
+        model_dir = get_model_dir("ace_step")
+        checkpoint_dir = _find_ace_step_checkpoint_dir(model_dir)
         prompt = music_prompt or _build_music_prompt(payload)
-        original_torchaudio_save = torchaudio.save
-
-        def _save_with_soundfile(
-            uri,
-            src,
-            sample_rate,
-            *,
-            channels_first=True,
-            format=None,
-            encoding=None,
-            bits_per_sample=None,
-            buffer_size=4096,
-            backend=None,
-            compression=None,
-        ):
-            """
-            TorchCodec 의존성 없이 soundfile로 wav를 저장한다.
-
-            Args:
-                uri: 저장 경로
-                src: 오디오 텐서
-                sample_rate: 샘플레이트
-                channels_first: 채널 우선 텐서 여부
-                format: 저장 포맷
-                encoding: 인코딩
-                bits_per_sample: 비트 수
-                buffer_size: 버퍼 크기
-                backend: 백엔드 이름
-                compression: 압축 설정
-            """
-
-            waveform = src.detach().cpu().numpy()
-            if channels_first and waveform.ndim == 2:
-                waveform = waveform.T
-            sf.write(str(uri), waveform, sample_rate)
-
-        torchaudio.save = _save_with_soundfile
-        try:
-            # 공식 infer-api 예시의 호출 인자 순서를 그대로 따른다.
-            model_demo(
-                "wav",  # format
-                float(payload.video_duration_seconds),  # audio_duration
+        logger.info(
+            "ACE-Step 음악 생성 시작: 길이=%s초, 보컬=%s, 언어=%s",
+            payload.video_duration_seconds,
+            payload.music_vocal_mode,
+            payload.music_language,
+        )
+        logger.info("ACE-Step 체크포인트 사용: %s", checkpoint_dir)
+        logger.info("ACE-Step 서브프로세스 호출 시작: %s", output_path)
+        subprocess.run(
+            [
+                sys.executable,
+                str(_get_ace_step_worker_path()),
+                "--checkpoint-dir",
+                str(checkpoint_dir),
+                "--duration",
+                str(float(payload.video_duration_seconds)),
+                "--prompt",
                 prompt,
+                "--lyrics",
                 music_lyrics,
-                8,  # infer_step
-                7.5,  # guidance_scale
-                "euler",  # scheduler_type
-                "apg",  # cfg_type
-                10.0,  # omega_scale
-                [42],  # manual_seeds
-                0.0,  # guidance_interval
-                0.0,  # guidance_interval_decay
-                5.0,  # min_guidance_scale
-                True,  # use_erg_tag
-                bool(music_lyrics),  # use_erg_lyric
-                False,  # use_erg_diffusion
-                "",  # oss_steps
-                0.0,  # guidance_scale_text
-                0.0,  # guidance_scale_lyric
-                save_path=str(output_path),
-            )
-        finally:
-            torchaudio.save = original_torchaudio_save
+                "--output-path",
+                str(output_path),
+            ],
+            check=True,
+        )
+        logger.info("ACE-Step 서브프로세스 호출 완료: %s", output_path)
+        _postprocess_music(output_path, payload.video_duration_seconds)
         _validate_music_duration(str(output_path), payload.video_duration_seconds)
+        logger.info("음악 길이 검증 완료: %s", output_path)
         return str(output_path)
     except Exception as exc:
         raise RuntimeError("ACE-Step 음악 생성에 실패했습니다.") from exc

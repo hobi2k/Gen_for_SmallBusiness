@@ -1,5 +1,7 @@
 # 프론트엔드 페이지와 컴포넌트 읽기
 
+이 문서는 프론트 화면 파일들을 실제로 어떻게 나눠 읽으면 되는지 설명합니다.
+
 이전 문서:
 
 - [프론트엔드 시작점 읽기](./03_frontend_start_here.md)
@@ -8,59 +10,92 @@
 
 - [프론트엔드와 백엔드 연결 읽기](./05_frontend_backend_connection.md)
 
-## 1. 메인 페이지는 무엇을 보여주는가
+## 1. 메인 페이지는 무엇을 담당하는가
 
-[frontend/app/page.tsx](../../frontend/app/page.tsx) 는 메인 채팅 화면을 보여줍니다.
+[frontend/app/page.tsx](../../frontend/app/page.tsx) 는 메인 화면입니다.
 
-이 파일에서 중요한 부분:
+여기서 중요한 건 "메인 페이지가 모든 로직을 다 갖고 있지 않다"는 점입니다.
 
-- 큰 소개 섹션
-- 모드 카드 3개
-- 채팅 패널
+이 파일의 역할은 주로 세 가지입니다.
 
-여기서 실제 입력 처리 코드는 [frontend/components/chat-panel.tsx](../../frontend/components/chat-panel.tsx) 로 내려갑니다.
+1. 메인 화면 레이아웃 배치
+2. 상단 히어로 영역 구성
+3. 채팅 컴포넌트 배치
 
-즉 `page.tsx`는 배치, `chat-panel.tsx`는 동작입니다.
+즉 이 파일은 "페이지 설계도"에 가깝습니다.
 
-## 2. 채팅 패널은 어떤 구조인가
+실제 채팅 동작은 [frontend/components/chat-panel.tsx](../../frontend/components/chat-panel.tsx) 가 맡습니다.
 
-[frontend/components/chat-panel.tsx](../../frontend/components/chat-panel.tsx) 를 보면 큰 덩어리가 세 개입니다.
+## 2. 채팅 컴포넌트는 왜 중요한가
 
-### 상태
+[frontend/components/chat-panel.tsx](../../frontend/components/chat-panel.tsx) 는 메인 화면의 핵심입니다.
 
-- `messages`
-- `latestResult`
-- `isSubmitting`
+이 파일 하나에 아래가 다 들어 있습니다.
 
-이 상태는 화면이 기억해야 하는 값입니다.
-
-### 이벤트 처리
-
-- `handleSubmit()`
-
-이 함수는 textarea의 내용을 읽고, 백엔드에 보내고, 응답을 받아 상태를 업데이트합니다.
-
-### 화면
-
-`return (...)` 안에는:
-
-- 예시 문구
-- 대화 목록
-- 입력 textarea
+- 예시 요청 버튼
+- 대화 메시지 목록
+- 첨부 이미지 처리
 - 전송 버튼
-- 최근 결과 패널
+- 생성 중 상태 표시
+- 생성 결과 미리보기
 
-이 들어 있습니다.
+즉 사용자가 실제로 가장 많이 상호작용하는 부분이 여기입니다.
 
-## 3. 전용 생성 페이지는 어떻게 구성되는가
+## 3. chat-panel을 읽는 방법
 
-각 페이지는 거의 같은 패턴입니다.
+이 파일은 길 수 있으니 아래 순서로 봐야 덜 헷갈립니다.
+
+### 1. 상태부터 보기
+
+먼저 이 컴포넌트가 무엇을 기억하는지 봅니다.
+
+예를 들어 보통 이런 값이 상태로 들어갑니다.
+
+- 메시지 배열
+- 현재 textarea 값
+- 첨부 이미지 목록
+- 생성 중 여부
+- 퍼센티지
+- 최근 생성 결과
+
+이걸 보면 "이 화면이 무엇을 하고 있는가"가 먼저 보입니다.
+
+### 2. 제출 함수 보기
+
+다음엔 `handleSubmit()`류 함수를 봅니다.
+
+여기서 중요한 건:
+
+- 어떤 값을 `FormData`나 JSON으로 묶는지
+- 어떤 URL로 보내는지
+- 성공하면 어떤 상태를 바꾸는지
+- 실패하면 어떤 메시지를 띄우는지
+
+즉 이 함수가 프론트 동작의 중심입니다.
+
+### 3. 결과 렌더링 보기
+
+마지막으로 `return (...)` 안에서:
+
+- 사용자 메시지가 어떻게 보이는지
+- 생성 중 메시지가 어떻게 뜨는지
+- 결과 이미지/영상/음악이 어떻게 노출되는지
+
+를 보면 됩니다.
+
+## 4. 전용 생성 페이지는 왜 따로 있는가
+
+메인 채팅만으로도 생성은 되지만, 더 세밀하게 만들고 싶을 때는 전용 생성 화면을 씁니다.
+
+각 페이지는 아래처럼 대응합니다.
 
 - [frontend/app/image/page.tsx](../../frontend/app/image/page.tsx)
 - [frontend/app/video/page.tsx](../../frontend/app/video/page.tsx)
 - [frontend/app/music/page.tsx](../../frontend/app/music/page.tsx)
 
-이 페이지들은 대부분 [frontend/components/generation-form.tsx](../../frontend/components/generation-form.tsx) 에 `mode`만 다르게 넘깁니다.
+이 파일들의 공통점은, 실제 폼을 직접 길게 구현하지 않는다는 것입니다.
+
+대부분 [frontend/components/generation-form.tsx](../../frontend/components/generation-form.tsx) 에 `mode`만 바꿔 넘깁니다.
 
 즉:
 
@@ -68,62 +103,72 @@
 - 영상 페이지 -> `mode="video"`
 - 음악 페이지 -> `mode="music"`
 
-## 4. generation-form.tsx는 왜 중요한가
+## 5. generation-form은 왜 중요한가
 
-[frontend/components/generation-form.tsx](../../frontend/components/generation-form.tsx) 는 전용 생성 화면의 핵심입니다.
+이 파일은 전용 생성 화면의 중심입니다.
 
-이 파일 하나가:
+즉 아래 세 화면의 실질적 로직이 모두 여기에 있습니다.
 
-- 이미지 생성 폼
-- 영상 생성 폼
-- 음악 생성 폼
+- 이미지 생성
+- 영상 생성
+- 음악 생성
 
-을 모두 처리합니다.
+### 이 파일이 하는 일
 
-차이는 `mode` 값으로 분기합니다.
+1. 공통 입력 렌더링
+2. 모드별 입력 분기
+3. 파일 업로드 처리
+4. `FormData` 생성
+5. API 호출
+6. 결과 패널 업데이트
 
-### 예를 들어
+즉 이 파일을 이해하면 "전용 생성 페이지 전체"를 이해하게 됩니다.
 
-- `mode === 'image'`
-  - 이미지 업로드 표시
-  - 이미지 생성용 설명/버튼 표시
+## 6. mode에 따라 무엇이 달라지는가
 
-- `mode === 'video'`
-  - 이미지 업로드 표시
-  - 음악 포함 여부 체크박스 표시
-  - 음악을 켠 경우에만 음악 설정 표시
+### 이미지 모드
 
-- `mode === 'music'`
-  - 업로드 없음
-  - 음악 설정만 표시
+- 이미지 업로드 가능
+- 배너 크기 입력 가능
+- 상세 이미지 크기 입력 가능
 
-## 5. 보컬 설정은 어디서 갈리는가
+### 영상 모드
 
-[frontend/components/generation-form.tsx](../../frontend/components/generation-form.tsx) 안에서:
+- 이미지 업로드 가능
+- 영상 해상도 입력 가능
+- 세로 상세 이미지 크기 입력 가능
+- 음악 포함 여부 선택 가능
+- 음악이 켜졌을 때만 음악 옵션 노출
 
-- `includeMusic`
-- `musicVocalMode`
+### 음악 모드
 
-두 상태가 음악 설정 표시를 제어합니다.
+- 업로드 없음
+- 음악 옵션만 사용
+- 보컬일 때만 가사 언어와 가사 입력 노출
 
-즉:
+즉 이 컴포넌트는 같은 화면이 아니라, `mode`에 따라 다른 폼을 한 파일에서 관리하는 구조입니다.
 
-- 영상 페이지에서 음악을 끄면 음악 설정 자체를 숨김
-- 보컬 방식이 `vocal`일 때만 가사 언어와 가사 입력을 보여줌
+## 7. 결과 패널은 왜 분리했는가
 
-이걸 보고 "상태에 따라 화면이 달라진다"는 React 기본 감각을 익히면 됩니다.
+[frontend/components/asset-result-panel.tsx](../../frontend/components/asset-result-panel.tsx) 는 전용 생성 화면의 결과 부분입니다.
 
-## 6. 결과는 어디에 표시되는가
+폼과 결과를 분리한 이유는 단순합니다.
 
-전용 생성 페이지 결과는 [frontend/components/asset-result-panel.tsx](../../frontend/components/asset-result-panel.tsx) 로 표시됩니다.
+- 폼 파일이 너무 커지지 않게 하려고
+- 응답 표시 로직을 따로 떼려고
+- 나중에 결과 UI만 바꿔도 입력 폼 코드를 건드리지 않으려고
 
-이 컴포넌트는 현재:
+즉 하나의 컴포넌트가 입력과 결과를 전부 책임지지 않게 나눈 것입니다.
 
-- 메시지
-- 저장 위치
-- 생성 자산 경로
+## 8. 페이지와 컴포넌트를 읽을 때 가져야 하는 감각
 
-를 보여줍니다.
+아래처럼 구분하면 됩니다.
 
-즉 생성 폼은 요청을 보내고, 결과 패널은 응답을 보여줍니다.
+- `app/*.tsx`
+  - URL 단위 화면
+  - 배치 중심
+- `components/*.tsx`
+  - 재사용 가능한 화면 조각
+  - 동작 중심
 
+이 감각이 잡히면 파일이 많아 보여도 덜 복잡합니다.

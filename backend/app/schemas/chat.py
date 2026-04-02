@@ -9,14 +9,16 @@ class ChatGenerateRequest(BaseModel):
     """
 
     message: str = Field(..., description="사용자 자연어 요청")
-    category: str | None = Field(default=None, description="업종")
     product_name: str | None = Field(default=None, description="상품명")
-    summary: str | None = Field(default=None, description="한 줄 소개")
-    description: str | None = Field(default=None, description="상세 설명")
-    keywords: list[str] = Field(default_factory=list, description="핵심 키워드")
-    selling_points: list[str] = Field(default_factory=list, description="강조할 판매 포인트")
+    prompt: str | None = Field(default=None, description="생성 프롬프트")
     tone: str = Field(default="깔끔한 판매형", description="원하는 분위기")
-    video_duration_seconds: int = Field(default=6, ge=3, le=10, description="영상 길이")
+    banner_width: int = Field(default=1280, ge=256, le=2048, description="배너 너비")
+    banner_height: int = Field(default=720, ge=256, le=2048, description="배너 높이")
+    detail_width: int = Field(default=720, ge=256, le=2048, description="상세 이미지 너비")
+    detail_height: int = Field(default=1280, ge=256, le=2048, description="상세 이미지 높이")
+    video_width: int = Field(default=832, ge=256, le=2048, description="영상 너비")
+    video_height: int = Field(default=480, ge=256, le=2048, description="영상 높이")
+    video_duration_seconds: int = Field(default=15, ge=1, le=40, description="영상 길이")
     image_paths: list[str] = Field(default_factory=list, description="업로드 이미지 경로")
     include_music: bool = Field(default=True, description="영상에 음악을 포함할지 여부")
     music_language: str = Field(default="ko", description="음악 가사 언어")
@@ -33,4 +35,7 @@ class ChatGenerateResponse(BaseModel):
     intent: str
     assistant_message: str
     project_root: str = ""
-    asset_paths: dict[str, str | list[str] | dict[str, str | list[str]]] = Field(default_factory=dict)
+    asset_paths: dict[
+        str,
+        str | list[str] | dict[str, str | list[str]],
+    ] = Field(default_factory=dict)

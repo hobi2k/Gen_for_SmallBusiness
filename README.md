@@ -33,11 +33,25 @@
 - 추가 폼 입력은 붙이지 않습니다.
 - LLM 에이전트가 도구를 직접 호출합니다.
 - 부족하면 추가 질문을 돌려주고, 충분하면 이미지 / 영상 / 음악 생성으로 바로 들어갑니다.
+- 사용자가 해상도를 문장 안에서 말하면 LLM이 배너 / 상세 / 영상 크기까지 도구 인자로 채웁니다.
+- 해상도를 따로 말하지 않으면 기본값을 사용합니다.
+- 보컬 모드에서 가사를 비워 두면 LLM이 상품 정보와 톤을 바탕으로 가사를 생성합니다.
 
 ### 전용 생성
 - 이미지 생성: 파일 업로드 지원
 - 영상 생성: 파일 업로드 지원
 - 음악 생성: 업로드 없이 입력만으로 생성 가능
+- 기본 입력은 `상품명`, `프롬프트`, `톤`, `길이` 중심으로 유지합니다.
+- 이미지 생성 화면:
+  - 가로 배너 크기 직접 입력 가능
+  - 세로 상세 이미지 크기 직접 입력 가능
+- 영상 생성 화면:
+  - 영상 해상도 직접 입력 가능
+  - 프레임과 생성 스텝 직접 입력 가능
+  - 세로 대표 이미지는 영상 해상도를 자동으로 따라감
+  - 영상 요청은 배너와 상세 이미지 번들을 먼저 만들지 않고 바로 영상 생성으로 들어감
+  - 기본 결과물은 영상만 만들고, 음악을 켜면 음악과 합성본까지 추가로 만듭니다
+  - 요청이 끝나면 영상 파이프라인을 바로 해제해 GPU 메모리를 비움
 
 ### 음악 옵션
 - 영상 생성은 음악을 아예 끌 수 있습니다.
@@ -68,6 +82,29 @@
 - `final_ad.mp4`
 는 만들지 않습니다.
 
+기본 해상도:
+- 배너: `1280x720`
+- 상세 이미지: `720x1280`
+- 영상: `832x480`
+
+이미지 생성 기준:
+- 업로드 이미지가 있으면 `img2img`를 사용합니다.
+- 현재 `img2img`와 `text-to-image`는 광고 포스터형 재구성 기준으로 설정돼 있습니다.
+- 한국어 자체를 프롬프트에서 금지하지 않습니다.
+- 영어 라벨은 모델이 만들 수 있게 열어두고, 한국어 카피는 후처리 오버레이로 붙입니다.
+
+영상 생성 기준:
+- 품질 우선 기준으로 `24fps` 고정입니다.
+- 긴 영상은 요청 크기(해상도 × fps × steps)에 따라 `2~5초` 단위 세그먼트로 나눠 생성합니다.
+- 영상 생성 스텝과 가이던스도 품질 우선으로 올린 상태입니다.
+- 전용 영상 생성 화면에서는 `fps`와 `steps`를 직접 조절할 수 있습니다.
+- 영상 요청이 끝나면 Wan 파이프라인 캐시를 비웁니다.
+
+음악 생성 기준:
+- ACE-Step 추론은 별도 작업 프로세스에서 실행합니다.
+- 서버 프로세스는 음악 후처리와 길이 검증만 담당합니다.
+- 전역 저장 함수 monkey patch를 서버 프로세스에 남기지 않습니다.
+
 ## 실행 방법
 
 ### 1. 가상환경과 의존성 설치
@@ -84,11 +121,11 @@ cd ..
 ```bash
 source .venv/bin/activate
 uv pip install -e ".[ai]"
-UV_CACHE_DIR=/tmp/uv-cache uv pip install --no-deps "ace-step @ git+https://github.com/ace-step/ACE-Step.git"
-UV_CACHE_DIR=/tmp/uv-cache uv pip install --no-deps --force-reinstall ./vendor/nunchaku-src
+UV_CACHE_DIR=.uv-cache uv pip install --no-deps "ace-step @ git+https://github.com/ace-step/ACE-Step.git"
+UV_CACHE_DIR=.uv-cache uv pip install --no-deps --force-reinstall ./vendor/nunchaku-src
 ```
 
-`nunchaku`는 프로젝트 내부 [vendor/nunchaku-src](/home/hosung/pytorch-demo/Gen_for_SmallBusiness/vendor/nunchaku-src) 기준으로 다시 설치합니다.
+`nunchaku`는 프로젝트 내부 [vendor/nunchaku-src](vendor/nunchaku-src) 기준으로 다시 설치합니다.
 즉 `/tmp` 같은 임시 경로를 기준으로 잡지 않습니다.
 `ace-step`는 `transformers` 충돌을 피하기 위해 별도 단계에서 `--no-deps`로 설치합니다.
 
@@ -131,6 +168,7 @@ npm run dev
 
 프론트는 이제 브라우저에서 백엔드 주소를 직접 치지 않습니다.  
 Next.js의 `/api/...` 라우트가 중간에서 요청을 받아 `BACKEND_BASE_URL`로 프록시합니다.
+기본 백엔드 포트는 `8013`으로 고정합니다.
 
 ## 동작 기준
 - `USE_LOCAL_AI_MODELS=false`

@@ -1,88 +1,105 @@
 # 백엔드 시작점 읽기
 
+이 문서는 백엔드 전체를 한 번에 설명하지 않습니다.  
+먼저 "앱이 어디서 시작하는가"만 이해하게 만드는 문서입니다.
+
 다음 문서:
 
 - [백엔드 요청 흐름 읽기](./02_backend_request_flow.md)
-- [프론트엔드와 백엔드 연결 읽기](./05_frontend_backend_connection.md)
 
-## 1. 가장 먼저 보는 파일
+## 1. 가장 먼저 볼 파일
 
-백엔드는 [backend/app/main.py](../../backend/app/main.py) 에서 시작합니다.
+백엔드 시작점은 [backend/app/main.py](../../backend/app/main.py) 입니다.
 
-이 파일에서 하는 일은 세 가지입니다.
+이 파일은 백엔드의 입구입니다.  
+웹 서버가 켜졌을 때 가장 먼저 FastAPI 앱을 준비하는 곳입니다.
 
-1. FastAPI 앱을 만든다.
-2. CORS를 켠다.
-3. 라우터를 붙인다.
+처음 읽을 때는 아래 세 가지만 보면 됩니다.
 
-여기서 가장 중요한 줄은 이것입니다.
+1. FastAPI 앱을 어디서 만드는가
+2. 앱 시작 시 어떤 준비를 하는가
+3. 실제 API 라우터를 어디서 붙이는가
+
+## 2. `main.py`에서 실제로 하는 일
+
+이 파일은 보통 아래 순서로 읽으면 됩니다.
+
+### 1. 설정 로드
+
+앱 이름, 저장 위치, CORS 허용 주소 같은 설정은 [backend/app/core/config.py](../../backend/app/core/config.py) 에서 가져옵니다.
+
+즉 `main.py`는 설정값을 직접 하드코딩하지 않고, 별도 설정 모듈에서 읽어옵니다.
+
+### 2. lifespan
+
+`lifespan()`은 앱이 켜질 때 한 번 실행되는 준비 단계입니다.
+
+여기서 중요한 건 데이터베이스 초기화입니다.
+
+- [backend/app/db/session.py](../../backend/app/db/session.py)
+- 여기의 `init_db()`가 호출됩니다.
+
+즉 앱은 "켜지기 전에 DB 준비부터 한다"는 뜻입니다.
+
+### 3. FastAPI 앱 생성
+
+여기서 `app = FastAPI(...)`가 나옵니다.
+
+이 줄은 "이 파일이 백엔드 앱의 진짜 시작점"이라는 뜻입니다.
+
+### 4. CORS 설정
+
+브라우저에서 요청할 때 막히지 않도록 CORS를 붙입니다.
+
+이 단계가 필요한 이유는, 프론트엔드와 백엔드가 서로 다른 프로세스로 실행되기 때문입니다.
+
+### 5. 라우터 연결
+
+가장 중요한 줄은 이것입니다.
 
 - `app.include_router(api_router)`
 
-즉, 실제 요청 처리는 `main.py`가 다 하는 게 아니라, `api_router`에게 넘깁니다.
+이 한 줄이 의미하는 건 단순합니다.
 
-## 2. 라우터를 어디서 모으는가
+"실제 URL 처리는 main.py가 다 하지 않고, 따로 모아둔 라우터 묶음에게 넘긴다."
 
-그다음 보는 파일은 [backend/app/api/routes.py](../../backend/app/api/routes.py) 입니다.
+즉 `main.py`는 입구지, 세부 작업 파일은 아닙니다.
 
-이 파일은 URL 묶음을 등록합니다.
+## 3. 그다음에 볼 파일
 
-- `/chat` -> [backend/app/api/chat.py](../../backend/app/api/chat.py)
-- `/generate` -> [backend/app/api/generation.py](../../backend/app/api/generation.py)
-- `/projects` -> [backend/app/api/projects.py](../../backend/app/api/projects.py)
-- `/health` -> [backend/app/api/health.py](../../backend/app/api/health.py)
+`main.py`를 봤다면 바로 [backend/app/api/routes.py](../../backend/app/api/routes.py) 로 갑니다.
 
-여기서 핵심은 이 프로젝트가 URL별로 파일을 나눠서 관리한다는 점입니다.
+이 파일은 URL별로 어떤 파일이 요청을 받는지 연결해 둔 곳입니다.
 
-예를 들어:
+예를 들어 이런 식입니다.
 
-- 채팅 요청은 `chat.py`
-- 이미지/영상/음악 전용 생성은 `generation.py`
+- `/chat` -> 채팅 관련 API
+- `/generate` -> 이미지/영상/음악 전용 생성 API
+- `/projects` -> 프로젝트 관리 API
+- `/health` -> 서버 상태 확인 API
 
-로 갑니다.
+즉 `routes.py`는 "주소 안내판"입니다.
 
-## 3. 설정은 어디서 읽는가
+## 4. 백엔드를 처음 읽을 때 가져야 하는 감각
 
-설정 파일은 [backend/app/core/config.py](../../backend/app/core/config.py) 입니다.
+처음엔 많은 사람이 `main.py`에 로직이 다 있을 거라고 생각합니다.  
+하지만 이 프로젝트는 그렇게 짜여 있지 않습니다.
 
-여기서 중요한 값:
+실제 구조는 이렇습니다.
 
-- `app_name`
-- `database_url`
-- `storage_root`
-- `model_root`
-- `use_local_ai_models`
+- `main.py`: 앱 시작
+- `routes.py`: URL 분기
+- `api/*.py`: 요청 받기
+- `services/*.py`: 흐름 조립
+- `tools/*.py`: 실제 생성 작업
 
-지금 생성 결과 저장 위치는 `storage_root`이고, 기본값은 `~/Downloads/장사한컷`입니다.
+즉 위에서 아래로 점점 세부로 내려가는 구조입니다.
 
-## 4. 데이터베이스 초기화는 어디서 하는가
+## 5. 여기까지 보고 기억하면 되는 것
 
-[backend/app/main.py](../../backend/app/main.py) 안의 `lifespan()`에서 [backend/app/db/session.py](../../backend/app/db/session.py) 의 `init_db()`를 호출합니다.
+- 백엔드는 [main.py](../../backend/app/main.py) 에서 시작한다.
+- 앱이 켜질 때 DB 초기화가 먼저 된다.
+- 실제 URL 처리는 [routes.py](../../backend/app/api/routes.py) 로 넘긴다.
+- `main.py`는 모든 걸 직접 처리하지 않는다.
 
-즉 앱이 켜질 때:
-
-1. DB 초기화
-2. 앱 실행
-
-순서로 갑니다.
-
-## 5. 백엔드를 읽는 가장 쉬운 순서
-
-처음 보는 사람에게는 이 순서가 가장 편합니다.
-
-1. [backend/app/main.py](../../backend/app/main.py)
-2. [backend/app/api/routes.py](../../backend/app/api/routes.py)
-3. [backend/app/api/chat.py](../../backend/app/api/chat.py)
-4. [backend/app/api/generation.py](../../backend/app/api/generation.py)
-5. [backend/app/services/chat_service.py](../../backend/app/services/chat_service.py)
-6. [backend/app/services/llm_agent_service.py](../../backend/app/services/llm_agent_service.py)
-7. [backend/app/services/generation_service.py](../../backend/app/services/generation_service.py)
-8. [backend/app/tools](../../backend/app/tools)
-
-여기서 중요한 감각은 이겁니다.
-
-- `api`는 입구
-- `services`는 LLM 도구 호출과 생성 흐름 정리
-- `tools`는 실제 작업
-
-즉 라우터가 직접 이미지나 영상을 만들지 않습니다. 라우터는 요청을 받고 서비스에 넘기고, 서비스가 도구를 호출합니다.
+이 감각이 잡히면 다음엔 "요청이 실제로 어디로 흘러가는가"를 보면 됩니다.

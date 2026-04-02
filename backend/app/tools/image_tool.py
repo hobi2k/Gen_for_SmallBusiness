@@ -1,13 +1,15 @@
-"""이미지 생성 도구 모듈"""
+"""이미지 생성 오케스트레이션 모듈"""
 
 from __future__ import annotations
 
 import inspect
 from functools import lru_cache
+import gc
+import logging
 from os import environ
 from pathlib import Path
 
-from PIL import Image, ImageEnhance, ImageOps
+from diffusers.utils import load_image
 
 from backend.app.schemas.project import ProjectCreateRequest
 from backend.app.tools.runtime_support import (
@@ -15,9 +17,34 @@ from backend.app.tools.runtime_support import (
     ensure_project_root,
     get_model_dir,
     is_model_downloaded,
-    render_marketing_card,
-    require_real_generation,
 )
+
+logger = logging.getLogger(__name__)
+
+
+def _pick_safe_generation_size(width: int, height: int) -> tuple[int, int]:
+    """
+    출력 비율을 유지하면서 Nunchaku가 처리하기 쉬운 내부 생성 해상도를 고른다.
+
+    Args:
+        width: 최종 요청 너비
+        height: 최종 요청 높이
+
+    Returns:
+        내부 생성에 사용할 안전 해상도
+    """
+
+    max_side = 1024
+    scale = min(max_side / max(width, 1), max_side / max(height, 1), 1.0)
+    scaled_width = max(256, int(round(width * scale)))
+    scaled_height = max(256, int(round(height * scale)))
+
+    def snap(value: int) -> int:
+        return max(256, int(round(value / 32)) * 32)
+
+    safe_width = snap(scaled_width)
+    safe_height = snap(scaled_height)
+    return safe_width, safe_height
 
 
 def _build_prompt(
@@ -38,15 +65,41 @@ def _build_prompt(
         정리된 프롬프트 문자열
     """
 
-    keywords = ", ".join(payload.keywords[:5]) if payload.keywords else payload.category
-    selling_points = (
-        ", ".join(payload.selling_points[:3]) if payload.selling_points else payload.summary
-    )
     headline = str(copy_bundle.get("headline", payload.product_name))
     return (
-        f"{variant_label}, {payload.product_name}, {payload.category}, {payload.tone}, "
-        f"{headline}, {selling_points}, {keywords}, polished commercial visual"
+        f"{variant_label}, {payload.product_name}, {payload.tone}, "
+        f"{headline}, {payload.prompt}, polished commercial visual, "
+        "clean product photography, ad-ready composition, "
+        "balanced composition with clear room for product naming and copy, "
+        "avoid broken characters, avoid garbled text, "
+        "simple english product label is allowed, clean english words on packaging are acceptable"
     )
+
+
+def release_image_pipelines() -> None:
+    """
+    캐시된 이미지 파이프라인을 해제하고 VRAM을 비운다.
+    영상·음악 모델을 로드하기 전에 호출한다.
+    """
+
+    _get_nunchaku_text_pipeline.cache_clear()
+    _get_nunchaku_img2img_pipeline.cache_clear()
+    _flush_cuda_memory()
+
+
+def _flush_cuda_memory() -> None:
+    """
+    파이프라인 전환 전에 가비지 컬렉션과 CUDA 캐시 정리를 시도한다.
+    """
+
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
 
 
 def _find_nunchaku_checkpoint(model_dir: Path, precision: str) -> Path:
@@ -185,6 +238,24 @@ def _patch_nunchaku_runtime() -> None:
     NunchakuZImageTransformer2DModel._genfor_forward_patch_applied = True
 
 
+def _prepare_text_pipeline_load() -> None:
+    """
+    text-to-image 로드 전에 img2img 캐시를 비운다.
+    """
+
+    _get_nunchaku_img2img_pipeline.cache_clear()
+    _flush_cuda_memory()
+
+
+def _prepare_img2img_pipeline_load() -> None:
+    """
+    img2img 로드 전에 text-to-image 캐시를 비운다.
+    """
+
+    _get_nunchaku_text_pipeline.cache_clear()
+    _flush_cuda_memory()
+
+
 @lru_cache(maxsize=1)
 def _get_nunchaku_text_pipeline():
     """
@@ -261,26 +332,6 @@ def _get_nunchaku_img2img_pipeline():
     return pipe
 
 
-def release_image_pipelines() -> None:
-    """
-    캐시된 이미지 파이프라인을 해제하고 VRAM을 비운다.
-    영상·음악 모델을 로드하기 전에 호출한다.
-    """
-
-    import gc
-
-    _get_nunchaku_text_pipeline.cache_clear()
-    _get_nunchaku_img2img_pipeline.cache_clear()
-    gc.collect()
-    try:
-        import torch
-
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-    except Exception:
-        pass
-
-
 def _get_first_existing_input_image(payload: ProjectCreateRequest) -> Path | None:
     """
     사용자가 올린 이미지 중 실제로 존재하는 첫 파일을 찾는다.
@@ -307,7 +358,7 @@ def _try_generate_with_nunchaku_zimage(
     variant_label: str,
     width: int,
     height: int,
-) -> str | None:
+) -> str:
     """
     Nunchaku Z-Image 로컬 모델이 준비된 경우 실제 이미지를 생성한다.
 
@@ -320,114 +371,66 @@ def _try_generate_with_nunchaku_zimage(
         height: 목표 높이
 
     Returns:
-        성공 시 저장 경로, 실패 시 None
+        저장 경로 문자열
     """
 
     if not can_use_cuda_models():
-        return None
+        raise RuntimeError("CUDA 기반 이미지 생성 환경을 사용할 수 없습니다.")
     if not is_model_downloaded("nunchaku_z_image_turbo"):
-        return None
+        raise RuntimeError("Nunchaku Z-Image 모델이 다운로드되지 않았습니다.")
 
     try:
-        from diffusers.utils import load_image
-
         prompt = _build_prompt(payload, copy_bundle, variant_label=variant_label)
         input_image = _get_first_existing_input_image(payload)
-
+        safe_width, safe_height = _pick_safe_generation_size(width, height)
+        logger.info(
+            "이미지 생성 시작: variant=%s, 해상도=%sx%s, 입력이미지=%s",
+            variant_label,
+            width,
+            height,
+            bool(input_image),
+        )
         if input_image is not None:
-            img2img_pipe = _get_nunchaku_img2img_pipeline()
-            result = img2img_pipe(
+            _prepare_img2img_pipeline_load()
+            pipe = _get_nunchaku_img2img_pipeline()
+            logger.info(
+                "이미지 생성 img2img 호출 시작: %s, 내부해상도=%sx%s",
+                variant_label,
+                safe_width,
+                safe_height,
+            )
+            result = pipe(
                 prompt=prompt,
-                image=load_image(str(input_image)).resize((width, height)),
-                strength=0.45,
-                num_inference_steps=8,
+                image=load_image(str(input_image)).resize((safe_width, safe_height)),
+                strength=0.72,
+                num_inference_steps=9,
                 guidance_scale=0.0,
             )
         else:
-            text_pipe = _get_nunchaku_text_pipeline()
-            result = text_pipe(
+            _prepare_text_pipeline_load()
+            pipe = _get_nunchaku_text_pipeline()
+            logger.info(
+                "이미지 생성 text-to-image 호출 시작: %s, 내부해상도=%sx%s",
+                variant_label,
+                safe_width,
+                safe_height,
+            )
+            result = pipe(
                 prompt=prompt,
-                width=width,
-                height=height,
-                num_inference_steps=8,
+                width=safe_width,
+                height=safe_height,
+                num_inference_steps=9,
                 guidance_scale=0.0,
             )
 
-        image = result.images[0]
+        image = result.images[0].convert("RGB")
+        image = image.resize((width, height))
         output_path.parent.mkdir(parents=True, exist_ok=True)
         image.save(output_path)
+        logger.info("이미지 저장 완료: %s", output_path)
         return str(output_path)
     except Exception as exc:
-        if require_real_generation():
-            raise RuntimeError("Nunchaku Z-Image 이미지 생성에 실패했습니다.") from exc
-        return None
-
-
-def _generate_fallback_image(
-    output_path: Path,
-    payload: ProjectCreateRequest,
-    copy_bundle: dict[str, str | list[str]],
-    *,
-    variant_label: str,
-    width: int,
-    height: int,
-) -> str:
-    """
-    로컬 대형 모델이 없을 때도 바로 쓸 수 있는 폴백 광고 이미지를 만든다.
-
-    Args:
-        output_path: 저장할 이미지 경로
-        payload: 프로젝트 생성 요청 데이터
-        copy_bundle: 문구 생성 결과
-        variant_label: 생성 종류 설명
-        width: 이미지 너비
-        height: 이미지 높이
-
-    Returns:
-        저장된 이미지 경로 문자열
-    """
-
-    input_image = _get_first_existing_input_image(payload)
-    if input_image is not None:
-        base = Image.open(input_image).convert("RGB")
-        base = ImageOps.contain(base, (width, height))
-        canvas = Image.new("RGB", (width, height), (250, 245, 239))
-        offset_x = (width - base.width) // 2
-        offset_y = (height - base.height) // 2
-        canvas.paste(base, (offset_x, offset_y))
-        canvas = ImageEnhance.Color(canvas).enhance(1.08)
-        canvas = ImageEnhance.Sharpness(canvas).enhance(1.12)
-        overlay_path = Path(
-            render_marketing_card(
-                output_path=output_path.with_name(f"{output_path.stem}_overlay.png"),
-                title=payload.product_name,
-                subtitle=f"{variant_label} | {payload.summary}",
-                badges=payload.selling_points[:2] + payload.keywords[:2],
-                width=width,
-                height=height,
-                tone=payload.tone,
-            ),
-        )
-        overlay = Image.open(overlay_path).convert("RGBA")
-        composed = Image.blend(canvas.convert("RGBA"), overlay, 0.26).convert("RGB")
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        composed.save(output_path)
-        overlay_path.unlink(missing_ok=True)
-        return str(output_path)
-
-    badges = payload.selling_points[:2] + payload.keywords[:2]
-    if not badges:
-        badges = [payload.summary, payload.category]
-
-    return render_marketing_card(
-        output_path=output_path,
-        title=payload.product_name,
-        subtitle=f"{variant_label} | {payload.summary}",
-        badges=badges,
-        width=width,
-        height=height,
-        tone=payload.tone,
-    )
+        raise RuntimeError("Nunchaku Z-Image 이미지 생성에 실패했습니다.") from exc
 
 
 def _generate_image(
@@ -440,7 +443,7 @@ def _generate_image(
     height: int,
 ) -> str:
     """
-    실제 모델 생성과 폴백 생성 중 가능한 경로를 골라 이미지를 만든다.
+    실제 이미지 모델로 결과 이미지를 만든다.
 
     Args:
         output_path: 저장할 이미지 경로
@@ -454,21 +457,7 @@ def _generate_image(
         저장된 이미지 경로 문자열
     """
 
-    generated_path = _try_generate_with_nunchaku_zimage(
-        output_path=output_path,
-        payload=payload,
-        copy_bundle=copy_bundle,
-        variant_label=variant_label,
-        width=width,
-        height=height,
-    )
-    if generated_path is not None:
-        return generated_path
-
-    if require_real_generation():
-        raise RuntimeError("실제 이미지 모델 생성이 되지 않아 폴백 없이 중단합니다.")
-
-    return _generate_fallback_image(
+    return _try_generate_with_nunchaku_zimage(
         output_path=output_path,
         payload=payload,
         copy_bundle=copy_bundle,
@@ -502,8 +491,8 @@ def generate_banner_images(
             payload,
             copy_bundle,
             variant_label=f"배너 시안 {index}",
-            width=1280,
-            height=720,
+            width=payload.banner_width,
+            height=payload.banner_height,
         )
         for index in range(1, 4)
     ]
@@ -513,6 +502,9 @@ def generate_detail_images(
     project_id: str,
     payload: ProjectCreateRequest,
     copy_bundle: dict[str, str | list[str]],
+    *,
+    width: int | None = None,
+    height: int | None = None,
 ) -> list[str]:
     """
     상세 페이지 대표 이미지 결과물 경로를 생성한다.
@@ -527,14 +519,16 @@ def generate_detail_images(
     """
 
     root = ensure_project_root(project_id)
+    target_width = width or payload.detail_width
+    target_height = height or payload.detail_height
     return [
         _generate_image(
             root / f"detail_{index}.png",
             payload,
             copy_bundle,
             variant_label=f"상세 대표 이미지 {index}",
-            width=1280,
-            height=960,
+            width=target_width,
+            height=target_height,
         )
         for index in range(1, 3)
     ]

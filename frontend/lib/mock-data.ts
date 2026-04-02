@@ -1,3 +1,4 @@
+// 이 파일은 예전 UI 시안이나 데모용으로 남겨 둔 고정 데이터 묶음이다.
 export const generationSteps = [
   '입력 확인',
   '문구 생성',

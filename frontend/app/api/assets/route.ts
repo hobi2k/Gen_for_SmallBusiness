@@ -3,6 +3,7 @@ import {extname, resolve} from 'node:path';
 
 import {NextRequest, NextResponse} from 'next/server';
 
+// 생성 결과와 업로드 원본만 브라우저에서 미리보기로 열 수 있게 제한한다.
 const allowedRoots = ['/home/hosung/Downloads/장사한컷', '/home/hosung/Downloads/uploads'];
 
 function contentTypeFor(extension: string): string {
@@ -41,6 +42,7 @@ export async function GET(request: NextRequest) {
   }
 
   const targetPath = resolve(rawPath);
+  // 임의의 로컬 파일을 열 수 없게, 허용 루트 안쪽 경로만 통과시킨다.
   const isAllowed = allowedRoots.some((root) => targetPath.startsWith(resolve(root)));
 
   if (!isAllowed) {

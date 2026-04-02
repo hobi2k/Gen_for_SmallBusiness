@@ -23,6 +23,12 @@ def _make_payload(include_music: bool = True) -> ProjectCreateRequest:
         keywords=["수제", "딸기"],
         selling_points=["과육이 살아 있습니다."],
         tone="깔끔한 판매형",
+        banner_width=1280,
+        banner_height=720,
+        detail_width=720,
+        detail_height=1280,
+        video_width=720,
+        video_height=1280,
         video_duration_seconds=6,
         image_paths=["/tmp/upload.png"],
         include_music=include_music,
@@ -48,7 +54,7 @@ def _patch_common_video_flow(monkeypatch, payload: ProjectCreateRequest) -> None
     monkeypatch.setattr(
         generation_service,
         "generate_detail_images",
-        lambda *args: ["/tmp/detail.png"],
+        lambda *args, **kwargs: ["/tmp/detail.png"],
     )
     monkeypatch.setattr(
         generation_service,
@@ -133,7 +139,7 @@ def test_generate_image_asset_bundle_returns_full_asset_groups(monkeypatch) -> N
     monkeypatch.setattr(
         generation_service,
         "generate_detail_images",
-        lambda *args: ["/tmp/detail.png"],
+        lambda *args, **kwargs: ["/tmp/detail.png"],
     )
     monkeypatch.setattr(generation_service, "generate_logo_drafts", lambda *args: ["/tmp/logo.png"])
     monkeypatch.setattr(
@@ -147,3 +153,62 @@ def test_generate_image_asset_bundle_returns_full_asset_groups(monkeypatch) -> N
     assert result["banners"] == ["/tmp/banner_final.png"]
     assert result["details"] == ["/tmp/detail_final.png"]
     assert result["logos"] == ["/tmp/logo.png"]
+
+
+def test_generate_video_asset_bundle_passes_custom_resolutions(monkeypatch) -> None:
+    """
+    영상 생성 서비스가 요청 해상도를 상세 이미지와 영상 생성 단계에 넘기는지 확인한다.
+    """
+
+    payload = _make_payload()
+    payload.detail_width = 900
+    payload.detail_height = 1600
+    payload.video_width = 1080
+    payload.video_height = 1920
+
+    monkeypatch.setattr(generation_service, "create_validated_request", lambda incoming: incoming)
+    monkeypatch.setattr(generation_service.settings, "storage_root", "/tmp")
+    monkeypatch.setattr(
+        generation_service,
+        "generate_copy",
+        lambda request: {"video_script": "script"},
+    )
+    captured: dict[str, tuple[int, int]] = {}
+
+    def _capture_detail_images(*args, **kwargs):
+        captured["detail"] = (kwargs["width"], kwargs["height"])
+        return ["/tmp/detail.png"]
+
+    def _capture_video(project_id, request, key_visual_path, copy_bundle):
+        captured["video"] = (request.video_width, request.video_height)
+        return "/tmp/video.mp4"
+
+    monkeypatch.setattr(generation_service, "generate_detail_images", _capture_detail_images)
+    monkeypatch.setattr(
+        generation_service,
+        "generate_banner_images",
+        lambda *args: ["/tmp/banner.png"],
+    )
+    monkeypatch.setattr(
+        generation_service,
+        "overlay_text_on_image",
+        lambda raw_path, output_path, payload, copy_bundle, asset_kind: output_path,
+    )
+    monkeypatch.setattr(
+        generation_service,
+        "select_key_visual",
+        lambda detail_paths, banner_paths, image_paths: detail_paths[0],
+    )
+    monkeypatch.setattr(generation_service, "generate_short_video", _capture_video)
+    monkeypatch.setattr(
+        generation_service,
+        "overlay_text_on_video",
+        lambda project_id, source_path, payload, copy_bundle: "/tmp/video_overlay.mp4",
+    )
+    monkeypatch.setattr(generation_service, "generate_music", lambda *args: "/tmp/music.wav")
+    monkeypatch.setattr(generation_service, "compose_final_video", lambda *args: "/tmp/final.mp4")
+
+    generation_service.generate_video_asset_bundle(payload)
+
+    assert captured["detail"] == (900, 1600)
+    assert captured["video"] == (1080, 1920)

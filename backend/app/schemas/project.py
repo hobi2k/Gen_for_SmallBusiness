@@ -10,17 +10,21 @@ class ProjectCreateRequest(BaseModel):
     프로젝트 생성 요청 데이터를 검증한다.
     """
 
-    category: str = Field(..., description="업종")
     product_name: str = Field(..., description="상품명")
-    summary: str = Field(..., description="한 줄 소개")
-    description: str = Field(..., description="상세 설명")
-    keywords: list[str] = Field(default_factory=list, description="핵심 키워드")
-    selling_points: list[str] = Field(default_factory=list, description="강조할 판매 포인트")
+    prompt: str = Field(..., description="생성 프롬프트")
     tone: str = Field(..., description="원하는 분위기")
+    banner_width: int = Field(default=1280, ge=256, le=2048, description="배너 이미지 너비")
+    banner_height: int = Field(default=720, ge=256, le=2048, description="배너 이미지 높이")
+    detail_width: int = Field(default=720, ge=256, le=2048, description="상세 이미지 너비")
+    detail_height: int = Field(default=1280, ge=256, le=2048, description="상세 이미지 높이")
+    video_width: int = Field(default=832, ge=256, le=2048, description="영상 너비")
+    video_height: int = Field(default=480, ge=256, le=2048, description="영상 높이")
+    video_fps: int = Field(default=24, ge=12, le=30, description="영상 프레임")
+    video_inference_steps: int = Field(default=12, ge=8, le=24, description="영상 생성 스텝")
     video_duration_seconds: int = Field(
-        default=6,
-        ge=3,
-        le=10,
+        default=15,
+        ge=1,
+        le=40,
         description="광고 영상 길이(초)",
     )
     image_paths: list[str] = Field(default_factory=list, description="업로드된 이미지 경로")
@@ -37,7 +41,6 @@ class ProjectResponse(BaseModel):
 
     id: str
     product_name: str
-    category: str
     tone: str
     status: str
     request_snapshot: str

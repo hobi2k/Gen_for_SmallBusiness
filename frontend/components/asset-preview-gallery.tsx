@@ -6,6 +6,7 @@ type AssetPreviewGalleryProps = {
 };
 
 export function AssetPreviewGallery({assets, dark = false}: AssetPreviewGalleryProps) {
+  // 생성 결과가 없으면 미리보기 카드 자체를 렌더링하지 않는다.
   if (!assets.length) {
     return null;
   }
@@ -21,6 +22,7 @@ export function AssetPreviewGallery({assets, dark = false}: AssetPreviewGalleryP
         const downloadClass = dark
           ? 'border border-white/12 bg-white/8 text-white/88 hover:bg-white/14'
           : 'border border-black/10 bg-white text-black/72 hover:bg-black/[0.03]';
+        // 브라우저에서는 백엔드 파일 경로를 직접 열 수 없으므로 자산 프록시 URL로 바꿔서 쓴다.
         const assetUrl = buildAssetUrl(asset.path);
         const fileName = asset.path.split('/').pop() || asset.label;
 

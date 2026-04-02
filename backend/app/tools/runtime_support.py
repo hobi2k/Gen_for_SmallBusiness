@@ -201,6 +201,38 @@ def get_media_duration(file_path: str) -> float:
     return float(result.stdout.strip())
 
 
+def get_video_dimensions(file_path: str) -> tuple[int, int]:
+    """
+    ffprobe로 영상 너비와 높이를 읽는다.
+
+    Args:
+        file_path: 확인할 영상 경로
+
+    Returns:
+        너비와 높이
+    """
+
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height",
+            "-of",
+            "csv=p=0:s=x",
+            file_path,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    width, height = result.stdout.strip().split("x")
+    return int(width), int(height)
+
+
 def pick_tone_colors(tone: str) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
     """
     분위기 값에 따라 카드용 배경 색 조합을 반환한다.

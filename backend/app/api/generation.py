@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -17,6 +18,7 @@ from backend.app.services.generation_service import (
 from backend.app.tools.runtime_support import save_uploaded_files
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 async def _read_uploads(files: list[UploadFile]) -> list[tuple[str, bytes]]:
@@ -39,14 +41,18 @@ async def _read_uploads(files: list[UploadFile]) -> list[tuple[str, bytes]]:
 
 
 async def _build_form_payload(
-    category: str = Form(...),
     product_name: str = Form(...),
-    summary: str = Form(...),
-    description: str = Form(...),
-    keywords: str = Form(""),
-    selling_points: str = Form(""),
+    prompt: str = Form(...),
     tone: str = Form(...),
-    video_duration_seconds: int = Form(6),
+    banner_width: int = Form(1280),
+    banner_height: int = Form(720),
+    detail_width: int = Form(720),
+    detail_height: int = Form(1280),
+    video_width: int = Form(832),
+    video_height: int = Form(480),
+    video_fps: int = Form(24),
+    video_inference_steps: int = Form(12),
+    video_duration_seconds: int = Form(15),
     include_music: bool = Form(True),
     music_language: str = Form("ko"),
     music_lyrics: str = Form(""),
@@ -63,13 +69,17 @@ async def _build_form_payload(
     project_id = f"upload-{uuid4()}"
     saved_paths = save_uploaded_files(project_id, await _read_uploads(images))
     return ProjectCreateRequest(
-        category=category,
         product_name=product_name,
-        summary=summary,
-        description=description,
-        keywords=[item.strip() for item in keywords.split(",") if item.strip()],
-        selling_points=[item.strip() for item in selling_points.split(",") if item.strip()],
+        prompt=prompt,
         tone=tone,
+        banner_width=banner_width,
+        banner_height=banner_height,
+        detail_width=detail_width,
+        detail_height=detail_height,
+        video_width=video_width,
+        video_height=video_height,
+        video_fps=video_fps,
+        video_inference_steps=video_inference_steps,
         video_duration_seconds=video_duration_seconds,
         image_paths=saved_paths,
         include_music=include_music,
@@ -94,7 +104,9 @@ async def generate_image(
     """
 
     try:
+        logger.info("API /generate/image 요청 수신")
         asset_paths = generate_image_asset_bundle(create_validated_request(payload))
+        logger.info("API /generate/image 요청 완료")
         return GenerationResponse(
             mode="image",
             message="배너와 상세 이미지, 로고 초안이 준비됐습니다.",
@@ -102,8 +114,10 @@ async def generate_image(
             asset_paths=asset_paths,
         )
     except ValueError as exc:
+        logger.exception("API /generate/image 검증 오류")
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
+        logger.exception("API /generate/image 처리 오류")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
@@ -122,7 +136,9 @@ async def generate_video(
     """
 
     try:
+        logger.info("API /generate/video 요청 수신")
         asset_paths = generate_video_asset_bundle(create_validated_request(payload))
+        logger.info("API /generate/video 요청 완료")
         return GenerationResponse(
             mode="video",
             message="짧은 광고 영상과 배경 음악, 최종 합성본이 준비됐습니다.",
@@ -130,8 +146,10 @@ async def generate_video(
             asset_paths=asset_paths,
         )
     except ValueError as exc:
+        logger.exception("API /generate/video 검증 오류")
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
+        logger.exception("API /generate/video 처리 오류")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
@@ -150,7 +168,9 @@ async def generate_music(
     """
 
     try:
+        logger.info("API /generate/music 요청 수신")
         asset_paths = generate_music_asset_bundle(create_validated_request(payload))
+        logger.info("API /generate/music 요청 완료")
         return GenerationResponse(
             mode="music",
             message="영상 길이에 맞춘 배경 음악이 준비됐습니다.",
@@ -158,6 +178,8 @@ async def generate_music(
             asset_paths=asset_paths,
         )
     except ValueError as exc:
+        logger.exception("API /generate/music 검증 오류")
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
+        logger.exception("API /generate/music 처리 오류")
         raise HTTPException(status_code=500, detail=str(exc)) from exc

@@ -48,13 +48,13 @@ uv run scripts/check_environment.py
 - 새 환경에서는 AI 의존성 설치 뒤에 반드시 아래를 다시 실행한다.
 
 ```bash
-UV_CACHE_DIR=/tmp/uv-cache uv pip install --no-deps --force-reinstall ./vendor/nunchaku-src
+UV_CACHE_DIR=.uv-cache uv pip install --no-deps --force-reinstall ./vendor/nunchaku-src
 ```
 
 - `ace-step`도 아래처럼 별도 설치를 전제로 한다.
 
 ```bash
-UV_CACHE_DIR=/tmp/uv-cache uv pip install --no-deps "ace-step @ git+https://github.com/ace-step/ACE-Step.git"
+UV_CACHE_DIR=.uv-cache uv pip install --no-deps "ace-step @ git+https://github.com/ace-step/ACE-Step.git"
 ```
 
 - 현재 프로젝트 코드는 `nunchaku` 런타임 시그니처 차이를 자체 보정하지만,

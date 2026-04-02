@@ -9,6 +9,7 @@ type ModeCardProps = {
 export function ModeCard({href, title, description}: ModeCardProps) {
   return (
     <Link
+      // 메인 화면에서 전용 생성 화면으로 이동하는 진입 카드다.
       className="group rounded-[24px] border border-white/10 bg-white/6 px-5 py-4 text-white transition hover:bg-white/10"
       href={href}
     >
