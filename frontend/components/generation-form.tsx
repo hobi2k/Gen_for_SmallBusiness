@@ -428,11 +428,13 @@ export function GenerationForm({mode}: GenerationFormProps) {
                     <textarea
                       className="h-36 rounded-2xl border border-black/10 bg-white px-4 py-3 font-normal"
                       name="music_lyrics"
-                      placeholder={'예:\n[Verse]\n또렷하게 들리는 한글 가사\n짧고 쉬운 문장으로 적기\n\n[Hook]\n브랜드 이름을 짧게 반복'}
+                      placeholder={
+                        '예:\n[Verse]\n햄스터 최강의 햄스터\n반짝반짝 빛나는 햄스터 스튜디오\n\n[Hook]\n햄 햄 햄 스튜디오\n짧고 또렷하게 반복'
+                      }
                     />
                   </label>
                   <p className="text-xs leading-5 text-black/52">
-                    직접 쓸 때는 짧은 문장으로 나누고, <code>[Verse]</code>, <code>[Hook]</code>처럼 구간을 나눠 적는 편이 안정적입니다.
+                    직접 쓸 때는 한 줄을 짧게 쓰고, 어려운 단어보다 또렷하게 읽히는 쉬운 음절을 반복하는 편이 낫습니다. <code>[Verse]</code>, <code>[Hook]</code>처럼 구간을 나눠 적어 주세요.
                   </p>
                 </div>
               ) : null}

@@ -1,52 +1,85 @@
 # 실행 런북
 
+## 원칙
+- 이 프로젝트는 `git clone` 후 이 저장소 안의 설치 절차만으로 실행 가능해야 한다.
+- ComfyUI, Stability Matrix, 개인 워크플로우 JSON, Windows 로컬 경로를 런타임 의존성으로 사용하지 않는다.
+- 외부 워크플로우는 파라미터와 품질 비교 참고용으로만 본다.
+- vendored 소스는 `vendor/`에 보관하고, 설치 시 `.venv` 안으로 다시 설치해서 사용한다.
+- 즉 런타임 import는 `vendor/...`를 직접 읽는 것이 아니라 `.venv`의 `site-packages`에서 일어난다.
+
 ## 1. 기본 환경 준비
 ```bash
 uv venv --python 3.11
-source .venv/bin/activate
 uv pip install -e ".[dev]"
 cd frontend
 npm install
 cd ..
 ```
 
+Windows PowerShell:
+```powershell
+.\scripts\bootstrap.ps1
+```
+
+Windows CMD / 더블클릭:
+```bat
+.\scripts\bootstrap.bat
+```
+
 ## 2. AI 의존성 설치
 ```bash
-source .venv/bin/activate
 uv pip install -e ".[ai]"
-UV_CACHE_DIR=.uv-cache uv pip install --no-deps "ace-step @ git+https://github.com/ace-step/ACE-Step.git"
+UV_CACHE_DIR=.uv-cache uv pip install --no-deps --force-reinstall ./vendor/ace-step-src
 UV_CACHE_DIR=.uv-cache uv pip install --no-deps --force-reinstall ./vendor/nunchaku-src
 ```
 
 추가 확인:
+- `ace-step`는 프로젝트 내부 `vendor/ace-step-src` 기준으로 다시 설치한다.
 - `nunchaku`는 프로젝트 내부 `vendor/nunchaku-src` 기준으로 다시 설치한다.
-- `ace-step`는 `transformers` 충돌을 피하기 위해 `--no-deps`로 별도 설치한다.
+- 둘 다 `--no-deps`로 별도 설치한다.
+- 실제 import 경로는 둘 다 `.venv` 안의 `site-packages`다.
 - 현재 프로젝트 코드는 `nunchaku`와 `diffusers` 시그니처 차이를 런타임에서 보정한다.
 
 ## 3. 모델 디렉토리 준비
 ```bash
-source .venv/bin/activate
-python scripts/initialize_models.py --create-only
+uv run python scripts/initialize_models.py --create-only
 ```
 
 ## 4. 모델 다운로드
 ```bash
-source .venv/bin/activate
-python scripts/initialize_models.py
+uv run python scripts/initialize_models.py
+```
+
+Windows PowerShell:
+```powershell
+.\scripts\download-models.ps1
+```
+
+Windows CMD / 더블클릭:
+```bat
+.\scripts\download-models.bat
 ```
 
 ## 4-1. 환경 점검
 ```bash
-source .venv/bin/activate
-python scripts/check_environment.py
+uv run python scripts/check_environment.py
 ```
 
 `nunchaku` import 경로가 `/tmp`를 타면 실패로 본다.
 
 ## 5. 백엔드 실행
 ```bash
-source .venv/bin/activate
-uvicorn backend.app.main:app --host 127.0.0.1 --port 8013
+uv run uvicorn backend.app.main:app --host 127.0.0.1 --port 8013
+```
+
+Windows PowerShell:
+```powershell
+.\scripts\start-backend.ps1
+```
+
+Windows CMD / 더블클릭:
+```bat
+.\scripts\start-backend.bat
 ```
 
 ## 6. 프론트엔드 실행
@@ -55,14 +88,28 @@ cd frontend
 npm run dev
 ```
 
+Windows PowerShell:
+```powershell
+.\scripts\start-frontend.ps1
+```
+
+Windows CMD / 더블클릭:
+```bat
+.\scripts\start-frontend.bat
+```
+
+백엔드와 프론트를 같이 띄우려면:
+```bat
+.\scripts\start-all.bat
+```
+
 프론트는 브라우저에서 FastAPI 주소를 직접 치지 않습니다.  
 Next.js의 `app/api` 라우트가 중간에서 백엔드로 프록시합니다.
 
 ## 7. 테스트
 ```bash
-source .venv/bin/activate
-pytest
-ruff check backend tests scripts/initialize_models.py scripts/check_environment.py
+uv run pytest
+uv run ruff check backend tests scripts/initialize_models.py scripts/check_environment.py
 ```
 
 ## 8. 환경 변수
@@ -77,6 +124,8 @@ ruff check backend tests scripts/initialize_models.py scripts/check_environment.
   - `~/Downloads/장사한컷`
 - 업로드 원본:
   - `~/Downloads/uploads`
+- ACE-Step 런타임 작업 루트:
+  - `.runtime/ace-step-runtime`
 
 ## 10. 실행 해석 기준
 - `USE_LOCAL_AI_MODELS=false`
@@ -149,6 +198,9 @@ ruff check backend tests scripts/initialize_models.py scripts/check_environment.
   - `24fps` 고정
   - 긴 영상은 요청 크기에 따라 `2~5초` 단위 세그먼트로 분할 생성
 - 음악
-  - 보컬 모드에서 가사가 비어 있으면 LLM이 가사를 생성
-  - LLM이 가사를 만들지 못하면 실패 처리
+  - 사용자가 가사를 직접 쓰면 그 가사를 그대로 사용
+  - 사용자가 가사를 비워 두고 보컬 모드를 켜면 GPT가 먼저 가사를 생성
   - ACE-Step은 별도 작업 프로세스에서 실행
+  - `music_language`만 사용자 입력을 그대로 사용
+  - BPM, 조성, 박자, 언어 보정은 공식 5Hz LM 4B가 정함
+  - 공식 `ACE-Step/Ace-Step1.5` 체크포인트와 `ACE-Step-1.5` 패키지 기준으로 동작

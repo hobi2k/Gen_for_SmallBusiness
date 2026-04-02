@@ -66,9 +66,16 @@ def _build_prompt(
     """
 
     headline = str(copy_bundle.get("headline", payload.product_name))
+    if "로고" in variant_label:
+        visual_prompt = str(copy_bundle.get("logo_image_prompt", "")).strip()
+    elif "상세" in variant_label:
+        visual_prompt = str(copy_bundle.get("detail_image_prompt", "")).strip()
+    else:
+        visual_prompt = str(copy_bundle.get("image_prompt", "")).strip()
+
     return (
         f"{variant_label}, {payload.product_name}, {payload.tone}, "
-        f"{headline}, {payload.prompt}, polished commercial visual, "
+        f"{headline}, {visual_prompt or payload.prompt}, polished commercial visual, "
         "clean product photography, ad-ready composition, "
         "balanced composition with clear room for product naming and copy, "
         "avoid broken characters, avoid garbled text, "

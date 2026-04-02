@@ -26,9 +26,9 @@ def _build_music_prompt(payload: ProjectCreateRequest) -> str:
         else "no lyrics"
     )
     return (
-        f"commercial music, {payload.tone}, {payload.product_name}, "
-        f"{payload.prompt}, {payload.video_duration_seconds} seconds, "
-        f"{vocal_text}, {language_text}"
+        f"advertising soundtrack, {payload.tone}, {payload.product_name}, "
+        f"{payload.video_duration_seconds} seconds, {vocal_text}, {language_text}, "
+        "clear lead melody, short hook, memorable motif, clean arrangement"
     )
 
 
@@ -45,10 +45,35 @@ def generate_copy(payload: ProjectCreateRequest) -> dict[str, str | list[str]]:
 
     copy_bundle = llm_agent_service.generate_copy_with_llm(payload)
 
+    if payload.music_vocal_mode == "vocal" and payload.music_lyrics:
+        copy_bundle["music_lyrics"] = payload.music_lyrics
     if payload.music_vocal_mode == "vocal" and not copy_bundle.get("music_lyrics"):
-        raise ValueError("보컬 모드에서는 LLM이 생성한 가사가 반드시 필요합니다.")
+        raise ValueError("보컬 모드에서는 사용자 가사 또는 GPT가 생성한 가사가 필요합니다.")
 
     if not copy_bundle.get("music_prompt"):
         copy_bundle["music_prompt"] = _build_music_prompt(payload)
+    if not copy_bundle.get("image_prompt"):
+        copy_bundle["image_prompt"] = (
+            f"commercial banner visual of {payload.product_name}, {payload.tone}, "
+            f"{payload.prompt}, polished advertising composition, clean layout"
+        )
+
+    if not copy_bundle.get("detail_image_prompt"):
+        copy_bundle["detail_image_prompt"] = (
+            f"vertical product detail visual of {payload.product_name}, {payload.tone}, "
+            f"{payload.prompt}, clean hero composition, premium commercial lighting"
+        )
+
+    if not copy_bundle.get("logo_image_prompt"):
+        copy_bundle["logo_image_prompt"] = (
+            f"brand logo poster for {payload.product_name}, {payload.tone}, "
+            f"{payload.prompt}, iconic symbol, clean commercial poster layout"
+        )
+
+    if not copy_bundle.get("video_prompt"):
+        copy_bundle["video_prompt"] = (
+            f"short advertising video for {payload.product_name}, {payload.tone}, "
+            f"{payload.prompt}, cinematic motion, clear focal subject, no subtitles"
+        )
 
     return copy_bundle

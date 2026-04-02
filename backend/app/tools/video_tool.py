@@ -299,7 +299,7 @@ def _try_generate_with_wan(
             logger.info("입력 이미지 없이 t2v 경로로 진행합니다.")
             pipe = _get_wan_t2v_pipeline()
             source_image = None
-        prompt = str(copy_bundle["video_script"])
+        prompt = str(copy_bundle.get("video_prompt") or copy_bundle["video_script"])
         negative_prompt = (
             "overexposed, static, blurry details, subtitle, low quality, jpeg artifacts, "
             "ugly, deformed hands, deformed face, fused fingers, crowded background"

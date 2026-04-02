@@ -4,45 +4,11 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import shutil
 
-import soundfile as sf
-import torchaudio
-from acestep.pipeline_ace_step import ACEStepPipeline
-
-
-def _save_with_soundfile(
-    uri,
-    src,
-    sample_rate,
-    *,
-    channels_first=True,
-    format=None,
-    encoding=None,
-    bits_per_sample=None,
-    buffer_size=4096,
-    backend=None,
-    compression=None,
-):
-    """
-    TorchCodec 의존성 없이 soundfile로 wav를 저장한다.
-
-    Args:
-        uri: 저장 경로
-        src: 오디오 텐서
-        sample_rate: 샘플레이트
-        channels_first: 채널 우선 텐서 여부
-        format: 저장 포맷
-        encoding: 인코딩
-        bits_per_sample: 비트 수
-        buffer_size: 버퍼 크기
-        backend: 백엔드 이름
-        compression: 압축 설정
-    """
-
-    waveform = src.detach().cpu().numpy()
-    if channels_first and waveform.ndim == 2:
-        waveform = waveform.T
-    sf.write(str(uri), waveform, sample_rate)
+from acestep.handler import AceStepHandler
+from acestep.inference import GenerationConfig, GenerationParams, generate_music
+from acestep.llm_inference import LLMHandler
 
 
 def main() -> int:
@@ -54,53 +20,97 @@ def main() -> int:
     """
 
     parser = argparse.ArgumentParser()
+    parser.add_argument("--project-root", required=True)
     parser.add_argument("--checkpoint-dir", required=True)
-    parser.add_argument("--duration", required=True, type=float)
-    parser.add_argument("--prompt", required=True)
+    parser.add_argument("--dit-model", required=True)
+    parser.add_argument("--lm-model", required=True)
+    parser.add_argument("--caption", required=True)
     parser.add_argument("--lyrics", default="")
+    parser.add_argument("--instrumental", default="false")
+    parser.add_argument("--language", default="ko")
+    parser.add_argument("--bpm", default="")
+    parser.add_argument("--keyscale", default="")
+    parser.add_argument("--time-signature", default="4")
+    parser.add_argument("--duration", required=True, type=float)
     parser.add_argument("--output-path", required=True)
     args = parser.parse_args()
 
     output_path = Path(args.output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    has_lyrics = bool(args.lyrics.strip())
-    infer_step = 16 if has_lyrics else 10
-    guidance_scale = 5.5 if has_lyrics else 6.5
-    omega_scale = 8.0 if has_lyrics else 9.0
+    bpm = int(args.bpm) if args.bpm.strip() else None
+    instrumental = args.instrumental.lower() == "true"
 
-    original_torchaudio_save = torchaudio.save
-    torchaudio.save = _save_with_soundfile
-    try:
-        pipeline = ACEStepPipeline(
-            checkpoint_dir=args.checkpoint_dir,
-            dtype="bfloat16",
-            torch_compile=False,
-            cpu_offload=True,
-        )
-        pipeline(
-            "wav",
-            args.duration,
-            args.prompt,
-            args.lyrics,
-            infer_step,
-            guidance_scale,
-            "euler",
-            "apg",
-            omega_scale,
-            [42],
-            0.0,
-            0.0,
-            5.0,
-            True,
-            has_lyrics,
-            False,
-            "",
-            0.0,
-            0.0,
-            save_path=str(output_path),
-        )
-    finally:
-        torchaudio.save = original_torchaudio_save
+    dit_handler = AceStepHandler()
+    dit_handler.initialize_service(
+        project_root=args.project_root,
+        config_path=args.dit_model,
+        device="cuda",
+        use_flash_attention=False,
+        compile_model=False,
+        offload_to_cpu=True,
+        offload_dit_to_cpu=False,
+    )
+
+    llm_handler = LLMHandler()
+    llm_handler.initialize(
+        checkpoint_dir=args.checkpoint_dir,
+        lm_model_path=args.lm_model,
+        backend="pt",
+        device="cuda",
+        offload_to_cpu=True,
+        dtype=None,
+    )
+
+    params = GenerationParams(
+        task_type="text2music",
+        caption=args.caption,
+        lyrics=args.lyrics,
+        instrumental=instrumental,
+        vocal_language=args.language or "unknown",
+        bpm=bpm,
+        keyscale=args.keyscale,
+        timesignature=args.time_signature,
+        duration=args.duration,
+        inference_steps=8,
+        seed=31,
+        guidance_scale=7.0,
+        use_adg=False,
+        sampler_mode="euler",
+        thinking=True,
+        use_cot_metas=True,
+        use_cot_caption=True,
+        use_cot_lyrics=False,
+        use_cot_language=True,
+    )
+    config = GenerationConfig(
+        batch_size=1,
+        allow_lm_batch=False,
+        use_random_seed=False,
+        seeds=[31],
+        audio_format="wav",
+    )
+    result = generate_music(
+        dit_handler=dit_handler,
+        llm_handler=llm_handler,
+        params=params,
+        config=config,
+        save_dir=str(output_path.parent),
+    )
+    if not result.success:
+        raise RuntimeError(result.error or result.status_message or "ACE-Step 음악 생성 실패")
+
+    generated_audio_path = None
+    for audio_info in getattr(result, "audios", []) or []:
+        candidate = audio_info.get("path") or audio_info.get("audio_path")
+        if candidate:
+            generated_audio_path = Path(candidate)
+            break
+
+    if generated_audio_path is None or not generated_audio_path.exists():
+        raise RuntimeError("ACE-Step 생성 결과에서 실제 오디오 파일 경로를 찾지 못했습니다.")
+
+    if generated_audio_path.resolve() != output_path.resolve():
+        shutil.move(str(generated_audio_path), str(output_path))
 
     return 0
 

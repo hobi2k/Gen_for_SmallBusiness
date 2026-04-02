@@ -51,10 +51,10 @@ uv run scripts/check_environment.py
 UV_CACHE_DIR=.uv-cache uv pip install --no-deps --force-reinstall ./vendor/nunchaku-src
 ```
 
-- `ace-step`도 아래처럼 별도 설치를 전제로 한다.
+- `ace-step`도 아래처럼 프로젝트 내부 vendored 소스로 별도 설치한다.
 
 ```bash
-UV_CACHE_DIR=.uv-cache uv pip install --no-deps "ace-step @ git+https://github.com/ace-step/ACE-Step.git"
+UV_CACHE_DIR=.uv-cache uv pip install --no-deps --force-reinstall ./vendor/ace-step-src
 ```
 
 - 현재 프로젝트 코드는 `nunchaku` 런타임 시그니처 차이를 자체 보정하지만,

@@ -319,12 +319,18 @@ def generate_copy_with_llm(payload: ProjectCreateRequest) -> dict[str, str | lis
 사용자 요청을 바탕으로 광고 문구 묶음을 만든다.
 어려운 영어를 남발하지 말고, 실제 배너/영상/음악 생성에 바로 쓸 수 있게 분명하게 쓴다.
 반드시 JSON만 출력한다.
-보컬 모드가 vocal이면 music_lyrics를 절대 비우지 마라.
-사용자가 가사를 직접 쓰지 않았어도 상품 정보와 톤에 맞춰 새 가사를 만들어라.
-instrumental이면 music_lyrics는 빈 문자열이어도 된다.
-한국어 가사를 만들 때는 발음이 쉬운 짧은 문장을 써라.
-브랜드 이름도 길게 꼬지 말고, 또렷하게 들릴 짧은 구절로 반복해라.
-한 줄이 너무 길지 않게 쓰고, [Verse], [Hook]처럼 구간을 나눠라.
+image_prompt, detail_image_prompt, logo_image_prompt, video_prompt는 모델 생성용 프롬프트다.
+이 네 값은 한국어 설명을 그대로 복사하지 말고, 이미지/영상 생성 모델이 잘 알아듣는 짧고 구체적인 영어 프롬프트로 작성한다.
+즉 사용자 입력이 한국어여도 생성용 프롬프트는 영어 중심으로 번역해서 써라.
+반대로 headline, subheads, detail_headline, short_social_copies는 사람이 보는 한국어 카피다.
+music_prompt는 ACE-Step 1.5에 넘길 음악 질의문이다.
+사용자 입력을 그대로 복붙하지 말고, 음악 스타일이 잘 드러나는 짧은 한국어 설명으로 정리하라.
+보컬 모드에서 사용자가 직접 가사를 쓰지 않았으면, music_lyrics를 반드시 생성하라.
+가사는 사용자가 지정한 언어를 따르고, 짧은 구조 태그([Verse], [Hook])를 붙여라.
+가사는 발음하기 쉬운 짧은 문장 위주로 쓰고, 광고용 짧은 음악 길이에 맞게 과도하게 길게 쓰지 마라.
+사용자가 직접 가사를 썼다면 그 가사를 최대한 유지하고, 새로 쓰지 마라.
+ACE-Step 5Hz LM은 BPM, 조성, 박자, 언어 보정과 conditioning 보조를 맡는다.
+music_vocal_mode는 결정하지 마라. 사용자가 고른 값을 백엔드가 그대로 유지한다.
 
 반환 형식:
 {
@@ -332,10 +338,12 @@ instrumental이면 music_lyrics는 빈 문자열이어도 된다.
   "subheads": ["...", "..."],
   "detail_headline": "...",
   "short_social_copies": ["...", "..."],
-  "music_prompt": "...",
+  "image_prompt": "english generation prompt ...",
+  "detail_image_prompt": "english generation prompt ...",
+  "logo_image_prompt": "english generation prompt ...",
+  "video_prompt": "english generation prompt ...",
+  "music_prompt": "음악 생성 질의문",
   "music_lyrics": "...",
-  "music_language": "ko",
-  "music_vocal_mode": "instrumental",
   "video_script": "..."
 }
 """
@@ -360,15 +368,12 @@ instrumental이면 music_lyrics는 빈 문자열이어도 된다.
             for item in copy_data.get("short_social_copies", [])
             if str(item).strip()
         ],
+        "image_prompt": str(copy_data.get("image_prompt", "")).strip(),
+        "detail_image_prompt": str(copy_data.get("detail_image_prompt", "")).strip(),
+        "logo_image_prompt": str(copy_data.get("logo_image_prompt", "")).strip(),
+        "video_prompt": str(copy_data.get("video_prompt", "")).strip(),
         "music_prompt": str(copy_data.get("music_prompt", "")).strip(),
         "music_lyrics": str(copy_data.get("music_lyrics", "")).strip(),
-        "music_language": (
-            str(copy_data.get("music_language", payload.music_language)).strip()
-            or payload.music_language
-        ),
-        "music_vocal_mode": (
-            str(copy_data.get("music_vocal_mode", payload.music_vocal_mode)).strip()
-            or payload.music_vocal_mode
-        ),
+        "music_vocal_mode": payload.music_vocal_mode,
         "video_script": str(copy_data.get("video_script", "")).strip(),
     }
