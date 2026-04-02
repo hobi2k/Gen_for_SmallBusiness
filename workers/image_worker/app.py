@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import io
+import base64
 from hashlib import sha256
 from pathlib import Path
 from threading import Lock
@@ -150,6 +152,7 @@ class ProductPayload(BaseModel):
     visual_summary: str
     source_image_source: Literal["storage", "references"]
     source_image_relative_path: str
+    source_image_data_url: Optional[str] = None
 
 
 class PromptVariantPayload(BaseModel):
@@ -159,6 +162,7 @@ class PromptVariantPayload(BaseModel):
 
 class StyleReferencePayload(BaseModel):
     relative_path: str
+    data_url: Optional[str] = None
 
 
 class GenerateRequest(BaseModel):
@@ -203,6 +207,47 @@ def _resolve_relative_path(source: Literal["storage", "references"], relative_pa
         raise HTTPException(status_code=404, detail="source_image_not_found")
 
     return absolute
+
+
+def _read_image_from_data_url(data_url: str):
+    try:
+        from PIL import Image
+    except Exception as error:  # pragma: no cover - runtime path
+        raise HTTPException(status_code=503, detail=f"python_deps_missing: {error}") from error
+
+    if not data_url.startswith("data:image/"):
+        raise HTTPException(status_code=400, detail="invalid_image_data_url")
+
+    try:
+        _, encoded = data_url.split(",", 1)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="malformed_image_data_url") from error
+
+    try:
+        buffer = base64.b64decode(encoded)
+    except Exception as error:
+        raise HTTPException(status_code=400, detail="invalid_image_data_base64") from error
+
+    return Image.open(io.BytesIO(buffer)).convert("RGB")
+
+
+def _load_payload_image(
+    *,
+    data_url: Optional[str],
+    source: Literal["storage", "references"],
+    relative_path: str,
+):
+    if data_url:
+        return _read_image_from_data_url(data_url)
+
+    path = _resolve_relative_path(source, relative_path)
+
+    try:
+        from PIL import Image
+    except Exception as error:  # pragma: no cover - runtime path
+        raise HTTPException(status_code=503, detail=f"python_deps_missing: {error}") from error
+
+    return Image.open(path).convert("RGB")
 
 
 def _target_size(aspect_ratio: Literal["1:1", "4:5", "9:16"]) -> tuple[int, int]:
@@ -378,16 +423,21 @@ def generate(payload: GenerateRequest, authorization: Optional[str] = Header(def
 
     pipeline = _load_pipeline()
 
-    product_image_path = _resolve_relative_path(
-        payload.product.source_image_source,
-        payload.product.source_image_relative_path,
+    product_image = _load_payload_image(
+        data_url=payload.product.source_image_data_url,
+        source=payload.product.source_image_source,
+        relative_path=payload.product.source_image_relative_path,
     )
-    product_image = Image.open(product_image_path).convert("RGB")
 
     style_reference_images = []
     for reference in payload.style_references:
-        reference_path = _resolve_relative_path("references", reference.relative_path)
-        style_reference_images.append(Image.open(reference_path).convert("RGB"))
+        style_reference_images.append(
+            _load_payload_image(
+                data_url=reference.data_url,
+                source="references",
+                relative_path=reference.relative_path,
+            )
+        )
 
     if not style_reference_images:
         raise HTTPException(status_code=400, detail="style_reference_missing")

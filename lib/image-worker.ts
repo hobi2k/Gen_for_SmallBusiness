@@ -1,7 +1,12 @@
 import "server-only";
 
 import { getThemeReferenceAssets } from "@/lib/reference-library";
+import {
+  inferReferenceMimeType,
+  readReferenceAsset
+} from "@/lib/reference-library";
 import { buildStorageAssetUrl } from "@/lib/storage-assets";
+import { inferStorageMimeType, readStorageAsset } from "@/lib/storage-assets";
 import { GeneratedImage, ProductAnalysis, PromptBundle, StyleId } from "@/lib/types";
 
 interface WorkerPromptVariant {
@@ -19,6 +24,7 @@ interface ImageWorkerRequest {
     visual_summary: string;
     source_image_source: Exclude<ProductAnalysis["sourceImageSource"], null>;
     source_image_relative_path: string;
+    source_image_data_url: string;
   };
   prompts: {
     representative: WorkerPromptVariant[];
@@ -27,6 +33,7 @@ interface ImageWorkerRequest {
   };
   style_references: Array<{
     relative_path: string;
+    data_url: string;
   }>;
 }
 
@@ -44,6 +51,24 @@ interface ImageWorkerResponse {
 
 function workerBaseUrl() {
   return process.env.IMAGE_WORKER_URL?.trim() ?? "";
+}
+
+function bufferToDataUrl(buffer: Buffer, mimeType: string) {
+  return `data:${mimeType};base64,${buffer.toString("base64")}`;
+}
+
+async function loadProductImageDataUrl(product: ProductAnalysis) {
+  if (!product.sourceImageRelativePath || !product.sourceImageSource) {
+    return null;
+  }
+
+  if (product.sourceImageSource === "storage") {
+    const asset = await readStorageAsset(product.sourceImageRelativePath);
+    return bufferToDataUrl(asset.buffer, inferStorageMimeType(asset.fileName));
+  }
+
+  const asset = await readReferenceAsset(product.sourceImageRelativePath);
+  return bufferToDataUrl(asset.buffer, inferReferenceMimeType(asset.fileName));
 }
 
 function defaultWorkerTimeoutMs() {
@@ -105,10 +130,25 @@ export async function requestImageWorkerGeneration({
   }
 
   const styleReferenceAssets = await getThemeReferenceAssets(styleId, 3);
+  const productImageDataUrl = await loadProductImageDataUrl(product);
 
-  if (!styleReferenceAssets.length) {
+  if (!styleReferenceAssets.length || !productImageDataUrl) {
     return null;
   }
+
+  const styleReferencePayloads = await Promise.all(
+    styleReferenceAssets.map(async (asset) => {
+      const loadedAsset = await readReferenceAsset(asset.relativePath);
+
+      return {
+        relative_path: asset.relativePath,
+        data_url: bufferToDataUrl(
+          loadedAsset.buffer,
+          inferReferenceMimeType(loadedAsset.fileName)
+        )
+      };
+    })
+  );
 
   const requestPayload: ImageWorkerRequest = {
     upload_token: product.uploadToken,
@@ -119,7 +159,8 @@ export async function requestImageWorkerGeneration({
       category_label: product.categoryLabel,
       visual_summary: product.visualSummary,
       source_image_source: product.sourceImageSource,
-      source_image_relative_path: product.sourceImageRelativePath
+      source_image_relative_path: product.sourceImageRelativePath,
+      source_image_data_url: productImageDataUrl
     },
     prompts: {
       representative: promptBundle.representative.map((item) => ({
@@ -132,9 +173,7 @@ export async function requestImageWorkerGeneration({
       })),
       negative_prompt: promptBundle.negativePrompt
     },
-    style_references: styleReferenceAssets.map((asset) => ({
-      relative_path: asset.relativePath
-    }))
+    style_references: styleReferencePayloads
   };
 
   const controller = new AbortController();
