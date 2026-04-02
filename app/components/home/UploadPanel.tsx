@@ -74,6 +74,20 @@ function nextMultiValue<T extends string>(current: T[], value: string, index: nu
   return Array.from(new Set(next.filter(Boolean)));
 }
 
+function parseOptionalNumber(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+
+  return Math.round(parsed * 10) / 10;
+}
+
 export function UploadPanel({
   file,
   activeSeedId,
@@ -127,7 +141,8 @@ export function UploadPanel({
           <h3 className="panel-title">선택 입력</h3>
           <p className="panel-copy">
             자동 분석이 애매하면 카테고리, 색감, 소재, 톤, 메모를 직접 보정할 수 있습니다. 비워두면
-            `None` 기준으로 처리합니다.
+            `None` 기준으로 처리합니다. 실측 사이즈를 넣으면 배경 위 배치 크기와 원근 보정에
+            반영됩니다.
           </p>
         </div>
       </div>
@@ -245,6 +260,63 @@ export function UploadPanel({
               </option>
             ))}
           </select>
+        </label>
+
+        <label className="field-card">
+          <strong>가로(cm)</strong>
+          <input
+            min="0"
+            placeholder="예: 9"
+            step="0.1"
+            type="number"
+            value={inputOverrides.dimensionsCm.widthCm ?? ""}
+            onChange={(event) =>
+              onInputOverridesChange({
+                dimensionsCm: {
+                  ...inputOverrides.dimensionsCm,
+                  widthCm: parseOptionalNumber(event.target.value)
+                }
+              })
+            }
+          />
+        </label>
+
+        <label className="field-card">
+          <strong>세로/깊이(cm)</strong>
+          <input
+            min="0"
+            placeholder="예: 9"
+            step="0.1"
+            type="number"
+            value={inputOverrides.dimensionsCm.depthCm ?? ""}
+            onChange={(event) =>
+              onInputOverridesChange({
+                dimensionsCm: {
+                  ...inputOverrides.dimensionsCm,
+                  depthCm: parseOptionalNumber(event.target.value)
+                }
+              })
+            }
+          />
+        </label>
+
+        <label className="field-card">
+          <strong>높이(cm)</strong>
+          <input
+            min="0"
+            placeholder="예: 7"
+            step="0.1"
+            type="number"
+            value={inputOverrides.dimensionsCm.heightCm ?? ""}
+            onChange={(event) =>
+              onInputOverridesChange({
+                dimensionsCm: {
+                  ...inputOverrides.dimensionsCm,
+                  heightCm: parseOptionalNumber(event.target.value)
+                }
+              })
+            }
+          />
         </label>
 
         <label className="field-card field-card--wide">

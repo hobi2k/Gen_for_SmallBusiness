@@ -49,6 +49,12 @@ export type StyleId =
 
 export type AspectRatio = "1:1" | "4:5" | "9:16";
 
+export interface ProductDimensionsCm {
+  widthCm: number | null;
+  depthCm: number | null;
+  heightCm: number | null;
+}
+
 export interface ProductAnalysis {
   uploadToken: string;
   fileName: string;
@@ -65,6 +71,7 @@ export interface ProductAnalysis {
   colorHints: ProductColorCue[];
   materialHints: ProductMaterialCue[];
   surfaceTone: ProductSurfaceTone;
+  dimensionsCm: ProductDimensionsCm;
   detectedTags: string[];
 }
 
@@ -75,6 +82,7 @@ export interface ProductInputOverrides {
   surfaceTone: ProductSurfaceTone | null;
   materialNotes: string | null;
   visualSummary: string | null;
+  dimensionsCm: ProductDimensionsCm;
 }
 
 export const EMPTY_PRODUCT_INPUT_OVERRIDES: ProductInputOverrides = {
@@ -83,7 +91,12 @@ export const EMPTY_PRODUCT_INPUT_OVERRIDES: ProductInputOverrides = {
   materialHints: [],
   surfaceTone: null,
   materialNotes: null,
-  visualSummary: null
+  visualSummary: null,
+  dimensionsCm: {
+    widthCm: null,
+    depthCm: null,
+    heightCm: null
+  }
 };
 
 export interface StyleSceneProfile {

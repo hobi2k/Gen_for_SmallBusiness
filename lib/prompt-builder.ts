@@ -164,6 +164,21 @@ function promptProductDescriptor(product: ProductAnalysis): string {
   return parts.join(", ");
 }
 
+function promptDimensionHint(product: ProductAnalysis): string {
+  const { widthCm, depthCm, heightCm } = product.dimensionsCm;
+  const parts = [
+    widthCm ? `${widthCm}cm wide` : "",
+    depthCm ? `${depthCm}cm deep` : "",
+    heightCm ? `${heightCm}cm tall` : ""
+  ].filter(Boolean);
+
+  if (!parts.length) {
+    return "";
+  }
+
+  return `real-world product size approximately ${parts.join(", ")}, keep tabletop placement scale physically believable`;
+}
+
 function productCategoryTokens(product: ProductAnalysis): string[] {
   const descriptor = [
     product.category,
@@ -269,10 +284,12 @@ function buildNegativePrompt(style: StylePreset, product: ProductAnalysis): stri
 
 function buildRepresentativePrompt(style: StylePreset, product: ProductAnalysis): string {
   const accentProps = filteredAccentProps(style, product);
+  const dimensionHint = promptDimensionHint(product);
 
   return [
     `premium ecommerce kitchen tabletop background for ${promptCategory(product)}`,
     promptProductDescriptor(product),
+    dimensionHint,
     kitchenSceneDirective(style),
     `foreground surface detail: ${style.sceneProfile.tableSurface}`,
     `background styling cues: ${style.sceneProfile.backgroundElements}`,
@@ -300,10 +317,12 @@ function buildRepresentativePrompt(style: StylePreset, product: ProductAnalysis)
 
 function buildLifestylePrompt(style: StylePreset, product: ProductAnalysis): string {
   const accentProps = filteredAccentProps(style, product);
+  const dimensionHint = promptDimensionHint(product);
 
   return [
     `lifestyle kitchen-dining background scene for ${promptCategory(product)}`,
     promptProductDescriptor(product),
+    dimensionHint,
     kitchenSceneDirective(style),
     `foreground surface detail: ${style.sceneProfile.tableSurface}`,
     `background styling cues: ${style.sceneProfile.backgroundElements}`,

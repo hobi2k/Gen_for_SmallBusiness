@@ -28,6 +28,11 @@ export const DEV_SEEDS: DevSeed[] = [
       colorHints: ["white", "neutral"],
       materialHints: ["ceramic"],
       surfaceTone: "cool",
+      dimensionsCm: {
+        widthCm: 24,
+        depthCm: 24,
+        heightCm: 2.5
+      },
       detectedTags: ["plate", "white", "neutral", "ceramic"]
     }
   },
@@ -56,6 +61,11 @@ export const DEV_SEEDS: DevSeed[] = [
       colorHints: ["earthy", "low-saturation"],
       materialHints: ["ceramic"],
       surfaceTone: "warm",
+      dimensionsCm: {
+        widthCm: 15,
+        depthCm: 15,
+        heightCm: 6.5
+      },
       detectedTags: ["bowl", "earthy", "low-saturation", "ceramic"]
     }
   },
@@ -84,6 +94,11 @@ export const DEV_SEEDS: DevSeed[] = [
       colorHints: ["cream", "beige"],
       materialHints: ["ceramic"],
       surfaceTone: "warm",
+      dimensionsCm: {
+        widthCm: 9,
+        depthCm: 9,
+        heightCm: 7
+      },
       detectedTags: ["cup", "cream", "beige", "ceramic"]
     }
   },
@@ -112,6 +127,11 @@ export const DEV_SEEDS: DevSeed[] = [
       colorHints: ["clear", "white"],
       materialHints: ["glass"],
       surfaceTone: "cool",
+      dimensionsCm: {
+        widthCm: 8,
+        depthCm: 8,
+        heightCm: 11
+      },
       detectedTags: ["glassware", "clear", "white", "glass"]
     }
   },
@@ -140,6 +160,11 @@ export const DEV_SEEDS: DevSeed[] = [
       colorHints: ["brown", "earthy"],
       materialHints: ["wood"],
       surfaceTone: "warm",
+      dimensionsCm: {
+        widthCm: 30,
+        depthCm: 22,
+        heightCm: 4
+      },
       detectedTags: ["tray", "brown", "earthy", "wood"]
     }
   },
@@ -168,6 +193,11 @@ export const DEV_SEEDS: DevSeed[] = [
       colorHints: ["gray", "neutral"],
       materialHints: ["metal"],
       surfaceTone: "cool",
+      dimensionsCm: {
+        widthCm: 22,
+        depthCm: 4,
+        heightCm: 2
+      },
       detectedTags: ["cutlery", "gray", "neutral", "metal"]
     }
   }

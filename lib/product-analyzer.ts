@@ -307,6 +307,14 @@ function normalizeMaterialHints(materialHints: ProductMaterialCue[]): ProductMat
   return meaningful.length ? meaningful : ["none"];
 }
 
+function normalizeDimensionValue(value: number | null | undefined): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+
+  return Math.round(value * 10) / 10;
+}
+
 function extractResponseText(payload: unknown): string | null {
   if (!payload || typeof payload !== "object") {
     return null;
@@ -618,6 +626,11 @@ export async function analyzeProductUpload(
     normalizeOptionalText(overrides?.visualSummary) ??
     normalizeOptionalText(visionAnalysis?.visualSummary) ??
     buildVisualSummary(categoryLabel, materialNotes, colorHints);
+  const dimensionsCm = {
+    widthCm: normalizeDimensionValue(overrides?.dimensionsCm?.widthCm),
+    depthCm: normalizeDimensionValue(overrides?.dimensionsCm?.depthCm),
+    heightCm: normalizeDimensionValue(overrides?.dimensionsCm?.heightCm)
+  };
 
   return {
     uploadToken: createUploadToken([file.name, file.size, file.type, file.lastModified]),
@@ -635,10 +648,14 @@ export async function analyzeProductUpload(
     colorHints,
     materialHints,
     surfaceTone,
+    dimensionsCm,
     detectedTags: [
       category,
       ...colorHints.filter((hint) => hint !== "unknown"),
       ...materialHints.filter((hint) => hint !== "none"),
+      ...Object.entries(dimensionsCm)
+        .filter(([, value]) => value !== null)
+        .map(([key, value]) => `${key}:${value}`),
       ...(materialNotes === "None"
         ? []
         : materialNotes.split(", ").map((item) => item.toLowerCase())),

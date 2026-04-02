@@ -93,6 +93,14 @@ export function StyleSelectionPanel({
   const materialHintsLabel =
     analysis.materialHints.filter((hint) => hint !== "none").join(" · ") || "None";
   const surfaceToneLabel = analysis.surfaceTone === "none" ? "None" : analysis.surfaceTone;
+  const dimensionsLabel =
+    analysis.dimensionsCm.widthCm || analysis.dimensionsCm.depthCm || analysis.dimensionsCm.heightCm
+      ? [
+          analysis.dimensionsCm.widthCm ?? "?",
+          analysis.dimensionsCm.depthCm ?? "?",
+          analysis.dimensionsCm.heightCm ?? "?"
+        ].join(" × ") + " cm"
+      : "None";
 
   const styleOptions: Array<{
     id: StyleId;
@@ -141,6 +149,10 @@ export function StyleSelectionPanel({
         <div className="mini-card">
           <strong>분석 소스</strong>
           <span>{analysisSourceLabel(analysis.analysisSource)}</span>
+        </div>
+        <div className="mini-card">
+          <strong>실측 사이즈</strong>
+          <span>{dimensionsLabel}</span>
         </div>
       </div>
 

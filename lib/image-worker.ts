@@ -26,6 +26,11 @@ interface ImageWorkerRequest {
     color_hints: ProductAnalysis["colorHints"];
     material_hints: ProductAnalysis["materialHints"];
     surface_tone: ProductAnalysis["surfaceTone"];
+    dimensions_cm: {
+      width_cm: number | null;
+      depth_cm: number | null;
+      height_cm: number | null;
+    };
     source_image_source: Exclude<ProductAnalysis["sourceImageSource"], null>;
     source_image_relative_path: string;
     source_image_data_url: string;
@@ -166,6 +171,11 @@ export async function requestImageWorkerGeneration({
       color_hints: product.colorHints,
       material_hints: product.materialHints,
       surface_tone: product.surfaceTone,
+      dimensions_cm: {
+        width_cm: product.dimensionsCm.widthCm,
+        depth_cm: product.dimensionsCm.depthCm,
+        height_cm: product.dimensionsCm.heightCm
+      },
       source_image_source: product.sourceImageSource,
       source_image_relative_path: product.sourceImageRelativePath,
       source_image_data_url: productImageDataUrl

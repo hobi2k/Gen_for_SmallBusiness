@@ -157,6 +157,12 @@ _CUTOUT_SESSION_LOCK = Lock()
 app = FastAPI(title="Lifestyle Shop Image Worker", version="0.2.0")
 
 
+class ProductDimensionsPayload(BaseModel):
+    width_cm: Optional[float] = None
+    depth_cm: Optional[float] = None
+    height_cm: Optional[float] = None
+
+
 class ProductPayload(BaseModel):
     category: str
     category_label: str
@@ -165,6 +171,7 @@ class ProductPayload(BaseModel):
     color_hints: List[str] = Field(default_factory=list)
     material_hints: List[str] = Field(default_factory=list)
     surface_tone: str = "none"
+    dimensions_cm: ProductDimensionsPayload = Field(default_factory=ProductDimensionsPayload)
     source_image_source: Literal["storage", "references"]
     source_image_relative_path: str
     source_image_data_url: Optional[str] = None
@@ -517,6 +524,92 @@ def _material_profile(product: ProductPayload) -> Literal["glass", "ceramic", "m
     return "generic"
 
 
+def _dimension_value(value: Optional[float]) -> Optional[float]:
+    if value is None:
+        return None
+
+    try:
+        parsed = float(value)
+    except Exception:
+        return None
+
+    if parsed <= 0:
+        return None
+
+    return parsed
+
+
+def _footprint_span_cm(product: ProductPayload) -> Optional[float]:
+    dimensions = product.dimensions_cm
+    width = _dimension_value(dimensions.width_cm)
+    depth = _dimension_value(dimensions.depth_cm)
+    height = _dimension_value(dimensions.height_cm)
+    profile = _placement_profile(product)
+
+    candidates = [value for value in [width, depth, height] if value is not None]
+    if not candidates:
+        return None
+
+    if profile == "flat":
+        planar = [value for value in [width, depth] if value is not None]
+        return max(planar) if planar else max(candidates)
+
+    if profile == "upright":
+        footprint = [value for value in [width, depth] if value is not None]
+        if footprint:
+            return max(footprint)
+        if height is not None:
+            return height * 0.72
+        return max(candidates)
+
+    if profile == "linear":
+        return max(candidates)
+
+    return max(candidates)
+
+
+def _reference_span_cm(product: ProductPayload) -> float:
+    category = (product.category or "").strip().lower()
+    if category in {"cup", "glassware"}:
+        return 8.5
+    if category == "plate":
+        return 24.0
+    if category == "bowl":
+        return 15.0
+    if category == "tray":
+        return 28.0
+    if category == "cutlery":
+        return 22.0
+    return 16.0
+
+
+def _dimension_scale_multiplier(product: ProductPayload) -> float:
+    span_cm = _footprint_span_cm(product)
+    if span_cm is None:
+        return 1.0
+
+    reference_span = _reference_span_cm(product)
+    multiplier = span_cm / max(reference_span, 1e-6)
+    return max(0.68, min(1.22, multiplier))
+
+
+def _dimension_height_ratio(product: ProductPayload) -> Optional[float]:
+    height = _dimension_value(product.dimensions_cm.height_cm)
+    footprint = _footprint_span_cm(product)
+    if height is None or footprint is None:
+        return None
+
+    ratio = height / max(footprint, 1e-6)
+    profile = _placement_profile(product)
+    if profile == "flat":
+        return max(0.08, min(0.34, ratio))
+    if profile == "upright":
+        return max(0.55, min(1.45, ratio))
+    if profile == "linear":
+        return max(0.04, min(0.18, ratio))
+    return max(0.12, min(1.2, ratio))
+
+
 def _dynamic_placement_width_ratio(
     kind: Literal["representative", "lifestyle"],
     product: ProductPayload,
@@ -555,6 +648,8 @@ def _dynamic_placement_width_ratio(
         ratio -= 0.02 if kind == "lifestyle" else 0.0
     elif profile == "linear":
         ratio += 0.03
+
+    ratio *= _dimension_scale_multiplier(product)
 
     return max(0.2, min(0.54, ratio))
 
@@ -899,6 +994,9 @@ def _select_placement_region(
     surface_factor = _target_surface_width_factor(profile=profile, kind=kind)
     cutout_width, cutout_height = cutout_size
     cutout_aspect = cutout_height / max(cutout_width, 1)
+    dimension_height_ratio = _dimension_height_ratio(product)
+    if dimension_height_ratio is not None:
+        cutout_aspect = cutout_aspect * 0.58 + dimension_height_ratio * 0.42
 
     rgb = scene_image.convert("RGB")
     array = np.array(rgb)
