@@ -153,6 +153,10 @@ class ProductPayload(BaseModel):
     category: str
     category_label: str
     visual_summary: str
+    material_notes: str
+    color_hints: List[str] = Field(default_factory=list)
+    material_hints: List[str] = Field(default_factory=list)
+    surface_tone: str = "none"
     source_image_source: Literal["storage", "references"]
     source_image_relative_path: str
     source_image_data_url: Optional[str] = None
@@ -286,6 +290,12 @@ def _make_canny_condition(image, size: tuple[int, int]):
     return Image.fromarray(edges)
 
 
+def _make_blank_condition(size: tuple[int, int]):
+    from PIL import Image
+
+    return Image.new("RGB", size, (0, 0, 0))
+
+
 def _extract_product_cutout(image):
     import cv2
     import numpy as np
@@ -315,6 +325,36 @@ def _extract_product_cutout(image):
         background_mask = np.isin(labels, border_labels)
         foreground = ~background_mask
 
+    # Remove bright enclosed "holes" like the white area inside a glass handle.
+    enclosed_background_candidate = (
+        ((mean_channel >= 238) & ((max_channel - min_channel) <= 24))
+        | ((array[:, :, 0] >= 242) & (array[:, :, 1] >= 242) & (array[:, :, 2] >= 242))
+    )
+    enclosed_labels_count, enclosed_labels = cv2.connectedComponents(
+        enclosed_background_candidate.astype("uint8")
+    )
+    if enclosed_labels_count > 1:
+        total_area = float(array.shape[0] * array.shape[1])
+        for label in range(1, enclosed_labels_count):
+            component = enclosed_labels == label
+            if not component.any():
+                continue
+            ys, xs = np.where(component)
+            touches_border = (
+                xs.min() == 0
+                or ys.min() == 0
+                or xs.max() == array.shape[1] - 1
+                or ys.max() == array.shape[0] - 1
+            )
+            if touches_border:
+                continue
+
+            area_ratio = component.sum() / max(total_area, 1.0)
+            if area_ratio > 0.08:
+                continue
+
+            foreground[component] = False
+
     alpha = (foreground.astype("uint8") * 255)
     alpha = cv2.GaussianBlur(alpha, (0, 0), sigmaX=1.4, sigmaY=1.4)
 
@@ -332,18 +372,52 @@ def _extract_product_cutout(image):
     return Image.fromarray(rgba, mode="RGBA").crop((left, top, right, bottom))
 
 
-def _placement_width_ratio(kind: Literal["representative", "lifestyle"], category: str) -> float:
-    ratio_map = {
-        "plate": {"representative": 0.44, "lifestyle": 0.34},
-        "bowl": {"representative": 0.34, "lifestyle": 0.28},
-        "cup": {"representative": 0.28, "lifestyle": 0.23},
-        "glassware": {"representative": 0.26, "lifestyle": 0.22},
-        "tray": {"representative": 0.52, "lifestyle": 0.4},
-        "cutlery": {"representative": 0.34, "lifestyle": 0.28},
-    }
+def _product_descriptor_text(product: ProductPayload) -> str:
+    return " ".join(
+        [
+            product.category or "",
+            product.category_label or "",
+            product.visual_summary or "",
+            product.material_notes or "",
+            " ".join(product.color_hints or []),
+            " ".join(product.material_hints or []),
+            product.surface_tone or "",
+        ]
+    ).lower()
 
-    category_ratio = ratio_map.get(category, {"representative": 0.3, "lifestyle": 0.24})
-    return category_ratio[kind]
+
+def _dynamic_placement_width_ratio(
+    kind: Literal["representative", "lifestyle"],
+    product: ProductPayload,
+    cutout_size: tuple[int, int],
+) -> float:
+    width, height = cutout_size
+    aspect_ratio = width / max(height, 1)
+    descriptor = _product_descriptor_text(product)
+
+    ratio = 0.29 if kind == "representative" else 0.23
+
+    if aspect_ratio >= 1.75:
+        ratio += 0.14
+    elif aspect_ratio >= 1.35:
+        ratio += 0.09
+    elif aspect_ratio >= 1.1:
+        ratio += 0.05
+    elif aspect_ratio <= 0.62:
+        ratio -= 0.05
+    elif aspect_ratio <= 0.82:
+        ratio -= 0.02
+
+    if any(term in descriptor for term in ["tray", "쟁반", "트레이", "plate", "접시", "rect", "square", "사각", "넓", "wide"]):
+        ratio += 0.06
+
+    if any(term in descriptor for term in ["glassware", "glass", "유리잔", "tall", "긴", "높"]):
+        ratio -= 0.03
+
+    if any(term in descriptor for term in ["cutlery", "fork", "knife", "spoon", "커트러리", "수저"]):
+        ratio += 0.04
+
+    return max(0.2, min(0.54, ratio))
 
 
 def _analyze_scene_context(scene_image, focus_box: tuple[int, int, int, int]) -> dict[str, float]:
@@ -493,7 +567,7 @@ def _compose_identity_locked_image(
     scene_image,
     product_image,
     kind: Literal["representative", "lifestyle"],
-    category: str,
+    product: ProductPayload,
 ):
     from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
@@ -502,7 +576,7 @@ def _compose_identity_locked_image(
 
     scene_width, scene_height = scene.size
     cutout_width, cutout_height = cutout.size
-    width_ratio = _placement_width_ratio(kind, category)
+    width_ratio = _dynamic_placement_width_ratio(kind, product, cutout.size)
     target_width = max(160, int(scene_width * width_ratio))
     target_height = max(120, int(target_width * (cutout_height / max(cutout_width, 1))))
 
@@ -532,18 +606,19 @@ def _compose_identity_locked_image(
     product_x = center_x - target_width // 2
     product_y = bottom_y - target_height
 
-    blur_pad_x = int(target_width * 0.18)
-    blur_pad_y = int(target_height * 0.16)
-    blur_box = (
-        max(product_x - blur_pad_x, 0),
-        max(product_y - blur_pad_y, 0),
-        min(product_x + target_width + blur_pad_x, scene_width),
-        min(product_y + target_height + blur_pad_y, scene_height),
-    )
-    blurred_patch = scene.crop(blur_box).filter(
-        ImageFilter.GaussianBlur(radius=max(8, int(target_width * 0.03)))
-    )
-    scene.paste(blurred_patch, blur_box)
+    duplicate_cleanup_layer = Image.new("RGBA", scene.size, (0, 0, 0, 0))
+    duplicate_cleanup_mask = Image.new("L", scene.size, 0)
+    cleanup_alpha = resized_cutout.getchannel("A")
+    cleanup_alpha = cleanup_alpha.filter(ImageFilter.GaussianBlur(radius=max(10, int(target_width * 0.03))))
+    cleanup_alpha = cleanup_alpha.point(lambda p: 255 if p > 18 else 0)
+    cleanup_alpha = cleanup_alpha.filter(ImageFilter.MaxFilter(size=17))
+    cleanup_alpha = cleanup_alpha.filter(ImageFilter.GaussianBlur(radius=max(18, int(target_width * 0.06))))
+    duplicate_cleanup_mask.paste(cleanup_alpha, (product_x, product_y))
+
+    scene_rgb = scene.convert("RGB")
+    blurred_scene = scene_rgb.filter(ImageFilter.GaussianBlur(radius=max(16, int(target_width * 0.06)))).convert("RGBA")
+    duplicate_cleanup_layer.paste(blurred_scene, (0, 0), duplicate_cleanup_mask)
+    scene = Image.alpha_composite(scene, duplicate_cleanup_layer)
 
     shadow_layer = Image.new("RGBA", scene.size, (0, 0, 0, 0))
     alpha = resized_cutout.getchannel("A")
@@ -601,6 +676,52 @@ def _compose_identity_locked_image(
     scene.alpha_composite(softened, (product_x, product_y))
 
     return scene.convert("RGB")
+
+
+def _product_negative_terms(product: ProductPayload) -> str:
+    category_token = (product.category or "product").replace("glassware", "glass")
+    category_label = product.category_label if product.category_label != "None" else "product"
+    color_terms = [term for term in product.color_hints if term and term != "unknown"]
+    material_terms = [term for term in product.material_hints if term and term != "none"]
+    summary = (product.visual_summary or "").strip().lower()
+    material_notes = (product.material_notes or "").strip().lower()
+
+    terms = [
+        "duplicate product",
+        "second product",
+        "extra object matching foreground product",
+        f"second {category_token}",
+        f"extra {category_token}",
+        f"duplicate foreground {category_token}",
+        f"same {category_token} as foreground",
+        f"same {category_label}",
+    ]
+
+    if color_terms:
+        terms.extend(f"{color} {category_token}" for color in color_terms[:2])
+
+    if material_terms:
+        terms.extend(f"{material} {category_token}" for material in material_terms[:2])
+
+    if product.surface_tone and product.surface_tone != "none":
+        terms.append(f"{product.surface_tone} toned {category_token}")
+
+    if summary and summary != "none":
+        terms.append(f"foreground summary: {summary}")
+
+    if material_notes and material_notes != "none":
+        terms.append(f"foreground material note: {material_notes}")
+
+    deduped_terms: list[str] = []
+    seen = set()
+    for term in terms:
+        normalized = term.strip().lower()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped_terms.append(term)
+
+    return ", ".join(deduped_terms)
 
 
 def _torch_dtype(torch_module, device: str):
@@ -814,7 +935,7 @@ def generate(payload: GenerateRequest, authorization: Optional[str] = Header(def
 
     def run_variant(kind: Literal["representative", "lifestyle"], index: int, prompt_variant: PromptVariantPayload):
         width, height = _target_size(prompt_variant.aspect_ratio)
-        control_image = _make_canny_condition(product_image, (width, height))
+        control_image = _make_blank_condition((width, height))
         style_image = ImageOps.fit(
             style_reference_images[(index + payload.regenerate_count) % len(style_reference_images)],
             (width, height),
@@ -829,15 +950,33 @@ def generate(payload: GenerateRequest, authorization: Optional[str] = Header(def
             RUNTIME_CONFIG["profile"],
         ) % (2**31)
         generator = _build_generator(torch, seed)
+        background_only_prompt = ", ".join(
+            [
+                prompt_variant.prompt,
+                "background scene only",
+                "theme interior only",
+                "leave the placement area empty",
+                "do not render the product",
+                "do not render any item matching the foreground product",
+                "no hero object on the placement area",
+                "no duplicate item",
+            ]
+        )
+        background_negative_prompt = ", ".join(
+            part
+            for part in [negative_prompt, _product_negative_terms(payload.product)]
+            if part
+        )
+        control_scale = 0.0
 
         try:
             with _INFERENCE_LOCK:
                 _reset_scheduler(pipeline)
                 result = pipeline(
-                    prompt=prompt_variant.prompt,
-                    negative_prompt=negative_prompt,
+                    prompt=background_only_prompt,
+                    negative_prompt=background_negative_prompt,
                     image=control_image,
-                    controlnet_conditioning_scale=float(RUNTIME_CONFIG["control_scale"]),
+                    controlnet_conditioning_scale=control_scale,
                     guidance_scale=_effective_guidance_scale(),
                     num_inference_steps=_effective_steps(),
                     width=width,
@@ -849,7 +988,7 @@ def generate(payload: GenerateRequest, authorization: Optional[str] = Header(def
                     scene_image=result,
                     product_image=product_image,
                     kind=kind,
-                    category=payload.product.category,
+                    product=payload.product,
                 )
         except Exception as error:  # pragma: no cover - runtime path
             _LAST_RUNTIME_ERROR = str(error)

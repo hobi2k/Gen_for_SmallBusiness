@@ -2,7 +2,7 @@ import { ProductAnalysis, PromptBundle, StylePreset } from "@/lib/types";
 import { hashString, seededAspectRatios } from "@/lib/utils";
 
 const NEGATIVE_PROMPT =
-  "text, logo, watermark, brand label, distorted object, duplicated product, extra handle, broken edge, floating cutlery, deformed ceramic, unreadable typography, cartoon, illustration";
+  "text, logo, watermark, brand label, distorted object, duplicated product, multiple products, second cup, second mug, extra cup, extra mug, cutout border, white box background, extra handle, broken edge, floating cutlery, deformed ceramic, unreadable typography, cartoon, illustration";
 
 const COPY_SCHEMA = JSON.stringify(
   {
@@ -82,15 +82,30 @@ function promptCategory(product: ProductAnalysis): string {
     : product.category;
 }
 
+function promptProductDescriptor(product: ProductAnalysis): string {
+  const parts = [
+    product.visualSummary !== "None" ? product.visualSummary : "",
+    product.materialNotes !== "None" ? product.materialNotes : "",
+    product.colorHints.filter((hint) => hint !== "unknown").join(" ")
+  ]
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  return parts.join(", ");
+}
+
 function buildRepresentativePrompt(style: StylePreset, product: ProductAnalysis): string {
   return [
-    `${promptCategory(product)} hero product photo`,
+    `premium ecommerce background scene for ${promptCategory(product)}`,
+    promptProductDescriptor(product),
     style.promptKeywords.join(", "),
-    "preserve exact product identity",
-    "correct scale and proportions",
+    "clean empty placement area at center",
+    "single setup only",
+    "do not render the product itself",
+    "no duplicate object",
     "centered composition",
     "clean commercial lighting",
-    "premium ecommerce photo",
+    "background only for later product compositing",
     "photorealistic",
     "no text"
   ].join(", ");
@@ -98,13 +113,16 @@ function buildRepresentativePrompt(style: StylePreset, product: ProductAnalysis)
 
 function buildLifestylePrompt(style: StylePreset, product: ProductAnalysis): string {
   return [
-    `${promptCategory(product)} naturally placed in a lifestyle table scene`,
+    `lifestyle background scene for ${promptCategory(product)}`,
+    promptProductDescriptor(product),
     style.promptKeywords.join(", "),
-    "preserve exact product identity",
-    "realistic scale and angle",
+    "clean placement area reserved for one product",
+    "do not render the product itself",
+    "no duplicate object",
     "natural perspective",
     "props secondary",
-    "premium lifestyle commerce photo",
+    "background only for later product compositing",
+    "realistic table depth",
     "photorealistic",
     "no text"
   ].join(", ");
