@@ -1264,6 +1264,69 @@ def _refine_composited_roi(
     return refined_scene
 
 
+def _clear_reserved_zone_conflicts(
+    *,
+    scene,
+    product_x: int,
+    product_y: int,
+    target_width: int,
+    target_height: int,
+    product: ProductPayload,
+):
+    from PIL import Image, ImageColor, ImageDraw, ImageFilter
+
+    profile = _placement_profile(product)
+    scene_rgba = scene.convert("RGBA")
+    scene_width, scene_height = scene_rgba.size
+
+    pad_x = int(target_width * (0.18 if profile == "upright" else 0.12 if profile == "flat" else 0.16))
+    pad_top = int(target_height * (0.06 if profile == "flat" else 0.1))
+    pad_bottom = int(target_height * (0.12 if profile == "upright" else 0.08))
+    zone_box = (
+        max(0, product_x - pad_x),
+        max(0, product_y - pad_top),
+        min(scene_width, product_x + target_width + pad_x),
+        min(scene_height, product_y + target_height + pad_bottom),
+    )
+
+    if zone_box[2] - zone_box[0] < 32 or zone_box[3] - zone_box[1] < 32:
+        return scene_rgba
+
+    roi = scene_rgba.crop(zone_box)
+    blur_radius = max(14, int(target_width * (0.065 if profile == "flat" else 0.05)))
+    softened = roi.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+
+    sample_strip = roi.crop(
+        (
+            0,
+            max(0, int(roi.size[1] * 0.62)),
+            roi.size[0],
+            min(roi.size[1], int(roi.size[1] * 0.92)),
+        )
+    ).convert("RGB")
+    mean_color = tuple(
+        int(channel)
+        for channel in sample_strip.resize((1, 1), Image.Resampling.BILINEAR).getpixel((0, 0))
+    )
+    tint_strength = 0.28 if profile == "flat" else 0.18
+    tint_layer = Image.new("RGBA", roi.size, (*mean_color, 255))
+    softened = Image.blend(softened, tint_layer, tint_strength)
+
+    mask = Image.new("L", roi.size, 0)
+    draw = ImageDraw.Draw(mask)
+    radius = max(20, int(min(roi.size) * (0.26 if profile == "upright" else 0.18)))
+    draw.rounded_rectangle(
+        (0, 0, roi.size[0], roi.size[1]),
+        radius=radius,
+        fill=255,
+    )
+    mask = mask.filter(ImageFilter.GaussianBlur(radius=max(10, int(target_width * 0.04))))
+
+    cleanup_layer = Image.new("RGBA", scene_rgba.size, (0, 0, 0, 0))
+    cleanup_layer.paste(softened, zone_box, mask)
+    return Image.alpha_composite(scene_rgba, cleanup_layer)
+
+
 def _compose_identity_locked_image(
     *,
     scene_image,
@@ -1347,6 +1410,14 @@ def _compose_identity_locked_image(
         product_x = max(left_bound, right_bound - target_width)
 
     product_y = max(8, min(scene_height - target_height - 8, product_y))
+    scene = _clear_reserved_zone_conflicts(
+        scene=scene,
+        product_x=product_x,
+        product_y=product_y,
+        target_width=target_width,
+        target_height=target_height,
+        product=product,
+    )
 
     duplicate_cleanup_layer = Image.new("RGBA", scene.size, (0, 0, 0, 0))
     duplicate_cleanup_mask = Image.new("L", scene.size, 0)
