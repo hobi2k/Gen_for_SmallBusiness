@@ -37,7 +37,11 @@ const KITCHEN_DOMAIN_NEGATIVE_TERMS = [
   "office desk",
   "bedside table",
   "tv console",
-  "coffee table living room"
+  "coffee table living room",
+  "missing dining table",
+  "no visible tabletop",
+  "cropped-out table surface",
+  "table hidden behind foreground objects"
 ] as const;
 
 function productPlacementDirective(product: ProductAnalysis): string {
@@ -164,6 +168,7 @@ function kitchenSceneDirective(style: StylePreset): string {
   return [
     style.sceneProfile.spaceType,
     style.sceneProfile.tableSurface,
+    `required scene elements: ${style.sceneProfile.requiredElements.join(", ")}`,
     style.sceneProfile.backgroundElements,
     style.sceneProfile.composition
   ].join(", ");

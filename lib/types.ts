@@ -89,6 +89,7 @@ export const EMPTY_PRODUCT_INPUT_OVERRIDES: ProductInputOverrides = {
 export interface StyleSceneProfile {
   spaceType: string;
   tableSurface: string;
+  requiredElements: string[];
   backgroundElements: string;
   accentProps: string[];
   composition: string;

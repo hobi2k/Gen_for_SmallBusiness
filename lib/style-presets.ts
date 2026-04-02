@@ -24,6 +24,7 @@ export const STYLE_PRESETS: Record<StyleId, StylePreset> = {
     sceneProfile: {
       spaceType: "beige-toned modern kitchen dining room with clean built-in cabinetry and wide windows",
       tableSurface: "matte stone or pale wood dining tabletop with generous empty surface",
+      requiredElements: ["visible dining table", "clear tabletop in the foreground", "empty placement zone on the tabletop"],
       backgroundElements: "subtle built-in cabinets, recessed linear lighting, soft curtains, minimal chairs",
       accentProps: ["single vase", "one understated pendant light", "minimal dining chair"],
       composition: "front-facing or gentle three-quarter view where the tabletop dominates the lower half and the room stays secondary",
@@ -47,6 +48,7 @@ export const STYLE_PRESETS: Record<StyleId, StylePreset> = {
     sceneProfile: {
       spaceType: "warm wooden kitchen-dining interior with oak millwork, slatted walls, beams, and calm daylight",
       tableSurface: "broad oak or walnut dining tabletop with visible grain and a stable flat placement zone",
+      requiredElements: ["visible wooden dining table", "wide tabletop plane in the lower foreground", "empty tabletop placement zone"],
       backgroundElements: "wood shelving, woven pendant lights, light linen curtains, restrained greenery",
       accentProps: ["folded linen cloth", "woven placemat", "small ceramic vase", "rattan pendant"],
       composition: "tabletop anchored in the foreground with the kitchen shelves softly receding behind it",
@@ -75,6 +77,7 @@ export const STYLE_PRESETS: Record<StyleId, StylePreset> = {
     sceneProfile: {
       spaceType: "airy nordic kitchen-dining space with white walls, pale wood furniture, and crisp daylight",
       tableSurface: "light oak dining tabletop or pale stone surface with a clean uncluttered foreground",
+      requiredElements: ["visible nordic dining table", "clear tabletop surface in the foreground", "empty center-front placement zone on the table"],
       backgroundElements: "white brick or plaster walls, simple pendant lights, slim chairs, sparse plants",
       accentProps: ["single white vase", "light fabric runner", "simple pendant lamp"],
       composition: "bright open framing with the tabletop clearly leading the scene and background decor kept minimal",
@@ -103,6 +106,7 @@ export const STYLE_PRESETS: Record<StyleId, StylePreset> = {
     sceneProfile: {
       spaceType: "french vintage dining room with cream mouldings, antique mirrors, and elegant classic table setting",
       tableSurface: "light painted wood or antique dining tabletop with refined empty placement space",
+      requiredElements: ["visible classic dining table", "clear tabletop plane with empty placement zone", "tabletop occupying the lower foreground"],
       backgroundElements: "ornate wall mouldings, chandelier glow, vintage chairs, muted floral arrangement",
       accentProps: ["small floral bouquet", "classic candlestick", "linen napkin", "antique mirror"],
       composition: "elegant dining-table perspective with the tabletop foreground clear and the ornamented room softened behind it",
@@ -126,6 +130,7 @@ export const STYLE_PRESETS: Record<StyleId, StylePreset> = {
     sceneProfile: {
       spaceType: "warm home-cafe kitchen corner with amber lighting, wood shelving, and intimate dining atmosphere",
       tableSurface: "warm mid-tone wood tabletop or café table with a clear near-front placement area",
+      requiredElements: ["visible cafe-style dining table", "clear wooden tabletop in the foreground", "empty placement zone kept free on the table"],
       backgroundElements: "coffee tools, chalkboard accents, tiled backsplash, wood shelves, soft lamps",
       accentProps: ["coffee dripper", "small pastry plate", "table lamp", "ceramic mug in background kept subtle"],
       composition: "close tabletop framing where the dining surface is dominant and the café details remain softly secondary",
@@ -149,6 +154,7 @@ export const STYLE_PRESETS: Record<StyleId, StylePreset> = {
     sceneProfile: {
       spaceType: "quiet japanese dining room with shoji screens, low wood table, and restrained natural materials",
       tableSurface: "low wooden dining tabletop with clean grain and a wide uncluttered placement area",
+      requiredElements: ["visible low dining table", "clear tabletop surface with empty foreground zone", "placement area centered on the table"],
       backgroundElements: "shoji panels, tatami-like textures, simple ceramics, low seating, soft paper lantern light",
       accentProps: ["linen runner", "single branch vase", "small ceramic bowl", "subtle tea utensil"],
       composition: "calm low-table perspective with balanced negative space and the tabletop clearly defining the foreground",
