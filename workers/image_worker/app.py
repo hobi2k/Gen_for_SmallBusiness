@@ -145,6 +145,8 @@ _PIPELINE_LOCK = Lock()
 _INFERENCE_LOCK = Lock()
 _PIPELINE_LOAD_ERROR: Optional[str] = None
 _LAST_RUNTIME_ERROR: Optional[str] = None
+_CUTOUT_SESSION = None
+_CUTOUT_SESSION_LOCK = Lock()
 
 app = FastAPI(title="Lifestyle Shop Image Worker", version="0.2.0")
 
@@ -296,7 +298,23 @@ def _make_blank_condition(size: tuple[int, int]):
     return Image.new("RGB", size, (0, 0, 0))
 
 
-def _extract_product_cutout(image):
+def _load_cutout_session():
+    global _CUTOUT_SESSION
+
+    if _CUTOUT_SESSION is not None:
+        return _CUTOUT_SESSION
+
+    with _CUTOUT_SESSION_LOCK:
+        if _CUTOUT_SESSION is not None:
+            return _CUTOUT_SESSION
+
+        from rembg import new_session
+
+        _CUTOUT_SESSION = new_session("u2net")
+        return _CUTOUT_SESSION
+
+
+def _extract_product_cutout_heuristic(image):
     import cv2
     import numpy as np
     from PIL import Image
@@ -370,6 +388,32 @@ def _extract_product_cutout(image):
 
     rgba = np.dstack([array, alpha])
     return Image.fromarray(rgba, mode="RGBA").crop((left, top, right, bottom))
+
+
+def _extract_product_cutout_with_rembg(image):
+    import io
+
+    from PIL import Image
+    from rembg import remove
+
+    buffer = io.BytesIO()
+    image.convert("RGBA").save(buffer, format="PNG")
+    session = _load_cutout_session()
+    removed = remove(buffer.getvalue(), session=session)
+    cutout = Image.open(io.BytesIO(removed)).convert("RGBA")
+    return _alpha_crop(cutout)
+
+
+def _extract_product_cutout(image):
+    try:
+        cutout = _extract_product_cutout_with_rembg(image)
+        alpha = cutout.getchannel("A")
+        if alpha.getbbox() is not None:
+            return cutout
+    except Exception:
+        pass
+
+    return _extract_product_cutout_heuristic(image)
 
 
 def _product_descriptor_text(product: ProductPayload) -> str:
