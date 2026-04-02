@@ -9,6 +9,7 @@ from threading import Lock
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import FastAPI, Header, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 
@@ -209,6 +210,19 @@ def _resolve_relative_path(source: Literal["storage", "references"], relative_pa
         raise HTTPException(status_code=404, detail="source_image_not_found")
 
     return absolute
+
+
+def _infer_asset_mime_type(file_name: str) -> str:
+    suffix = Path(file_name).suffix.lower()
+
+    if suffix in {".jpg", ".jpeg"}:
+        return "image/jpeg"
+    if suffix == ".png":
+        return "image/png"
+    if suffix == ".webp":
+        return "image/webp"
+
+    return "application/octet-stream"
 
 
 def _read_image_from_data_url(data_url: str):
@@ -418,6 +432,19 @@ def health():
         "device_fallback_reason": DEVICE_FALLBACK_REASON,
         "last_error": _LAST_RUNTIME_ERROR or _PIPELINE_LOAD_ERROR,
     }
+
+
+@app.get("/asset")
+def asset(path: str, authorization: Optional[str] = Header(default=None)):
+    _require_auth(authorization)
+
+    absolute_path = _resolve_relative_path("storage", path)
+
+    return FileResponse(
+        absolute_path,
+        media_type=_infer_asset_mime_type(absolute_path.name),
+        headers={"Cache-Control": "public, max-age=3600, stale-while-revalidate=86400"},
+    )
 
 
 @app.post("/generate", response_model=GenerateResponse)

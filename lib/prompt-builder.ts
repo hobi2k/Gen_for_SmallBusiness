@@ -76,12 +76,38 @@ function formatSurfaceTone(product: ProductAnalysis): string {
   return product.surfaceTone === "none" ? "None" : product.surfaceTone;
 }
 
+function promptCategory(product: ProductAnalysis): string {
+  return product.category === "none" || product.category === "tableware"
+    ? "tableware product"
+    : product.category;
+}
+
 function buildRepresentativePrompt(style: StylePreset, product: ProductAnalysis): string {
-  return `${fillTemplate(style, product)} 핵심 키워드: ${style.promptKeywords.join(", ")}. 제품이 프레임 중심에 오고 실제 비율과 윤곽을 유지한다. 대표 감성 이미지용, 상품이 가장 먼저 읽히는 구도, 상세페이지 메인 컷.`;
+  return [
+    `${promptCategory(product)} hero product photo`,
+    style.promptKeywords.join(", "),
+    "preserve exact product identity",
+    "correct scale and proportions",
+    "centered composition",
+    "clean commercial lighting",
+    "premium ecommerce photo",
+    "photorealistic",
+    "no text"
+  ].join(", ");
 }
 
 function buildLifestylePrompt(style: StylePreset, product: ProductAnalysis): string {
-  return `${fillTemplate(style, product)} 핵심 키워드: ${style.promptKeywords.join(", ")}. 실제 사용 맥락이 느껴지되 주변 소품은 보조 역할만 한다. 라이프스타일 이미지용, 생활감 있는 테이블 장면, 상품 정체성이 흐려지지 않도록 유지한다.`;
+  return [
+    `${promptCategory(product)} naturally placed in a lifestyle table scene`,
+    style.promptKeywords.join(", "),
+    "preserve exact product identity",
+    "realistic scale and angle",
+    "natural perspective",
+    "props secondary",
+    "premium lifestyle commerce photo",
+    "photorealistic",
+    "no text"
+  ].join(", ");
 }
 
 function buildCopyPrompt(style: StylePreset, product: ProductAnalysis): string {

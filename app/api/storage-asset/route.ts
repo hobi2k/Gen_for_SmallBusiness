@@ -4,6 +4,29 @@ import { inferStorageMimeType, readStorageAsset } from "@/lib/storage-assets";
 
 export const runtime = "nodejs";
 
+function workerBaseUrl() {
+  return process.env.IMAGE_WORKER_URL?.trim() ?? "";
+}
+
+function isImageWorkerProxyConfigured() {
+  return process.env.IMAGE_WORKER_ENABLED === "true" && Boolean(workerBaseUrl());
+}
+
+async function fetchRemoteAsset(relativePath: string) {
+  const token = process.env.IMAGE_WORKER_TOKEN?.trim();
+  const response = await fetch(
+    `${workerBaseUrl().replace(/\/+$/, "")}/asset?path=${encodeURIComponent(relativePath)}`,
+    {
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
+      cache: "no-store"
+    }
+  );
+
+  return response;
+}
+
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const relativePath = url.searchParams.get("path");
@@ -23,8 +46,34 @@ export async function GET(request: Request) {
       }
     });
   } catch (error) {
-    const status = error instanceof Error && error.message === "invalid_storage_path" ? 400 : 404;
+    if (error instanceof Error && error.message === "invalid_storage_path") {
+      return NextResponse.json({ error: "스토리지 경로가 올바르지 않습니다." }, { status: 400 });
+    }
 
-    return NextResponse.json({ error: "스토리지 파일을 찾을 수 없습니다." }, { status });
+    if (isImageWorkerProxyConfigured()) {
+      try {
+        const remoteResponse = await fetchRemoteAsset(relativePath);
+
+        if (remoteResponse.ok) {
+          const contentType =
+            remoteResponse.headers.get("Content-Type") ?? inferStorageMimeType(relativePath);
+
+          return new NextResponse(await remoteResponse.arrayBuffer(), {
+            status: 200,
+            headers: {
+              "Content-Type": contentType,
+              "Cache-Control": "public, max-age=3600, stale-while-revalidate=86400"
+            }
+          });
+        }
+      } catch {
+        return NextResponse.json(
+          { error: "원격 생성 이미지를 가져오는 중 오류가 발생했습니다." },
+          { status: 502 }
+        );
+      }
+    }
+
+    return NextResponse.json({ error: "스토리지 파일을 찾을 수 없습니다." }, { status: 404 });
   }
 }
