@@ -25,6 +25,9 @@ os.environ.setdefault("TRANSFORMERS_CACHE", str(MODEL_CACHE_ROOT / "transformers
 
 IMAGE_WORKER_TOKEN = os.getenv("IMAGE_WORKER_TOKEN", "").strip()
 IMAGE_WORKER_PROFILE = os.getenv("IMAGE_WORKER_PROFILE", "full").strip().lower() or "full"
+IMAGE_REFINEMENT_ENABLED = (
+    os.getenv("IMAGE_REFINEMENT_ENABLED", "false").strip().lower() == "true"
+)
 
 PROFILE_DEFAULTS = {
     "full": {
@@ -1471,6 +1474,9 @@ def _refine_with_inpaint(
     import numpy as np
     from PIL import Image, ImageDraw, ImageFilter
 
+    if not IMAGE_REFINEMENT_ENABLED:
+        return scene
+
     pipeline = _load_refinement_pipeline()
     if pipeline is None:
         return scene
@@ -1892,6 +1898,9 @@ def _load_refinement_pipeline():
     global _REFINEMENT_PIPELINE
     global _REFINEMENT_PIPELINE_LOAD_ERROR
 
+    if not IMAGE_REFINEMENT_ENABLED:
+        return None
+
     if EFFECTIVE_DEVICE == "cpu":
         return None
 
@@ -1978,10 +1987,12 @@ def _round_to_multiple(value: int, multiple: int = 8) -> int:
 
 @app.get("/health")
 def health():
+    refinement_error = _REFINEMENT_PIPELINE_LOAD_ERROR if IMAGE_REFINEMENT_ENABLED else None
     return {
         "ok": _PIPELINE_LOAD_ERROR is None and _LAST_RUNTIME_ERROR is None,
         "loaded": _PIPELINE is not None,
-        "refinement_loaded": _REFINEMENT_PIPELINE is not None,
+        "refinement_enabled": IMAGE_REFINEMENT_ENABLED,
+        "refinement_loaded": IMAGE_REFINEMENT_ENABLED and _REFINEMENT_PIPELINE is not None,
         "profile": RUNTIME_CONFIG["profile"],
         "requested_device": RUNTIME_CONFIG["device"],
         "effective_device": EFFECTIVE_DEVICE,
@@ -1998,7 +2009,7 @@ def health():
         "ip_scale": RUNTIME_CONFIG["ip_scale"],
         "ip_adapter_enabled": IP_ADAPTER_ENABLED,
         "device_fallback_reason": DEVICE_FALLBACK_REASON,
-        "last_error": _LAST_RUNTIME_ERROR or _PIPELINE_LOAD_ERROR or _REFINEMENT_PIPELINE_LOAD_ERROR,
+        "last_error": _LAST_RUNTIME_ERROR or _PIPELINE_LOAD_ERROR or refinement_error,
     }
 
 
