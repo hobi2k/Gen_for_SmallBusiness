@@ -780,12 +780,12 @@ def _target_surface_width_factor(
     kind: Literal["representative", "lifestyle"],
 ) -> float:
     if profile == "flat":
-        return 0.48 if kind == "representative" else 0.42
+        return 0.4 if kind == "representative" else 0.34
     if profile == "upright":
-        return 0.26 if kind == "representative" else 0.2
+        return 0.18 if kind == "representative" else 0.14
     if profile == "linear":
-        return 0.52 if kind == "representative" else 0.44
-    return 0.3 if kind == "representative" else 0.24
+        return 0.44 if kind == "representative" else 0.36
+    return 0.24 if kind == "representative" else 0.18
 
 
 def _score_empty_surface(
@@ -888,7 +888,12 @@ def _select_placement_region(
     for candidate in candidates:
         candidate_width = int(candidate["right"] - candidate["left"])
         surface_target_width = max(120, int(candidate_width * surface_factor))
-        target_width = min(int(candidate_width * 0.82), max(base_target_width, surface_target_width))
+        lower_bias = min(1.0, max(0.0, (candidate["y"] / max(scene_height, 1) - 0.54) / 0.3))
+        depth_scale = 0.74 + lower_bias * 0.24
+        target_width = min(
+            int(candidate_width * 0.72),
+            int(max(base_target_width, surface_target_width) * depth_scale),
+        )
         target_height = max(110, int(target_width * cutout_aspect))
         free_height = int(candidate["y"] - candidate["top"])
         if free_height > 0 and target_height > int(free_height * 0.86):
@@ -921,7 +926,6 @@ def _select_placement_region(
                 continue
 
             center_bias = 1 - abs((center_x / max(scene_width, 1)) - 0.5)
-            lower_bias = min(1.0, max(0.0, (candidate["y"] / max(scene_height, 1) - 0.54) / 0.3))
             candidate_strength = candidate["score"] / max(max_candidate_score, 1e-6)
             width_bias = min(1.0, candidate_width / max(scene_width * 0.42, 1))
             score = (
@@ -1203,11 +1207,28 @@ def _compose_identity_locked_image(
     target_width, target_height = resized_cutout.size
     product_x = center_x - target_width // 2
     if profile == "flat":
-        center_x = int(scene_width * 0.5 if anchor["confidence"] <= 0 else center_x)
+        center_x = int(scene_width * 0.5 if placement["confidence"] <= 0 else center_x)
         product_x = center_x - target_width // 2
 
     contact_lift = max(1, int(target_height * (0.012 if profile == "flat" else 0.02)))
     product_y = bottom_y - target_height - contact_lift
+    left_bound = max(4, int(placement["surface_left"]))
+    right_bound = min(scene_width - 4, int(placement["surface_right"]))
+    if target_width > max(80, right_bound - left_bound):
+        shrink_scale = max(0.58, (right_bound - left_bound) / max(target_width, 1))
+        target_width = max(96, int(target_width * shrink_scale))
+        target_height = max(84, int(target_height * shrink_scale))
+        resized_cutout = resized_cutout.resize((target_width, target_height), Image.Resampling.LANCZOS)
+        resized_cutout = _apply_scene_lighting(resized_cutout, scene_context)
+
+    target_width, target_height = resized_cutout.size
+    product_x = center_x - target_width // 2
+    if product_x < left_bound:
+        product_x = left_bound
+    if product_x + target_width > right_bound:
+        product_x = max(left_bound, right_bound - target_width)
+
+    product_y = max(8, min(scene_height - target_height - 8, product_y))
 
     duplicate_cleanup_layer = Image.new("RGBA", scene.size, (0, 0, 0, 0))
     duplicate_cleanup_mask = Image.new("L", scene.size, 0)

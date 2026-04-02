@@ -164,6 +164,52 @@ function promptProductDescriptor(product: ProductAnalysis): string {
   return parts.join(", ");
 }
 
+function productCategoryTokens(product: ProductAnalysis): string[] {
+  const descriptor = [
+    product.category,
+    product.categoryLabel,
+    product.visualSummary,
+    product.materialNotes,
+    product.detectedTags.join(" ")
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  if (/(cup|glass|glassware|mug|컵|유리잔|머그)/.test(descriptor)) {
+    return ["cup", "mug", "glass", "glassware", "ceramic mug", "tea cup"];
+  }
+
+  if (/(tray|쟁반|트레이)/.test(descriptor)) {
+    return ["tray", "serving tray", "rectangular tray", "wooden tray"];
+  }
+
+  if (/(plate|접시|platter)/.test(descriptor)) {
+    return ["plate", "platter", "dish"];
+  }
+
+  if (/(bowl|볼)/.test(descriptor)) {
+    return ["bowl", "small bowl", "serving bowl"];
+  }
+
+  if (/(cutlery|fork|knife|spoon|커트러리|포크|나이프|수저)/.test(descriptor)) {
+    return ["fork", "knife", "spoon", "cutlery", "utensil set"];
+  }
+
+  return [];
+}
+
+function filteredAccentProps(style: StylePreset, product: ProductAnalysis): string[] {
+  const blockedTokens = productCategoryTokens(product);
+  if (!blockedTokens.length) {
+    return style.sceneProfile.accentProps;
+  }
+
+  return style.sceneProfile.accentProps.filter((prop) => {
+    const normalized = prop.toLowerCase();
+    return !blockedTokens.some((token) => normalized.includes(token));
+  });
+}
+
 function kitchenSceneDirective(style: StylePreset): string {
   return [
     style.sceneProfile.spaceType,
@@ -222,6 +268,8 @@ function buildNegativePrompt(style: StylePreset, product: ProductAnalysis): stri
 }
 
 function buildRepresentativePrompt(style: StylePreset, product: ProductAnalysis): string {
+  const accentProps = filteredAccentProps(style, product);
+
   return [
     `premium ecommerce kitchen tabletop background for ${promptCategory(product)}`,
     promptProductDescriptor(product),
@@ -230,7 +278,7 @@ function buildRepresentativePrompt(style: StylePreset, product: ProductAnalysis)
     `background styling cues: ${style.sceneProfile.backgroundElements}`,
     productPlacementDirective(product),
     style.promptKeywords.join(", "),
-    `allowed accent props: ${style.sceneProfile.accentProps.join(", ")}`,
+    `allowed accent props: ${accentProps.join(", ") || "none"}`,
     "single kitchen or dining space only",
     "kitchen cabinetry or dining details kept secondary",
     "clean empty placement area on the dining table",
@@ -251,6 +299,8 @@ function buildRepresentativePrompt(style: StylePreset, product: ProductAnalysis)
 }
 
 function buildLifestylePrompt(style: StylePreset, product: ProductAnalysis): string {
+  const accentProps = filteredAccentProps(style, product);
+
   return [
     `lifestyle kitchen-dining background scene for ${promptCategory(product)}`,
     promptProductDescriptor(product),
@@ -259,7 +309,7 @@ function buildLifestylePrompt(style: StylePreset, product: ProductAnalysis): str
     `background styling cues: ${style.sceneProfile.backgroundElements}`,
     productPlacementDirective(product),
     style.promptKeywords.join(", "),
-    `allowed accent props: ${style.sceneProfile.accentProps.join(", ")}`,
+    `allowed accent props: ${accentProps.join(", ") || "none"}`,
     "single kitchen or dining space only",
     "clean placement area reserved on the dining table",
     "reserved product placement zone on the tabletop must stay empty",
