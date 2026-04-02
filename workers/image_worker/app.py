@@ -286,6 +286,323 @@ def _make_canny_condition(image, size: tuple[int, int]):
     return Image.fromarray(edges)
 
 
+def _extract_product_cutout(image):
+    import cv2
+    import numpy as np
+    from PIL import Image
+
+    rgb = image.convert("RGB")
+    array = np.array(rgb)
+    max_channel = array.max(axis=2)
+    min_channel = array.min(axis=2)
+    mean_channel = array.mean(axis=2)
+
+    # Treat bright, low-variance pixels connected to the image border as background.
+    background_candidate = (
+        ((mean_channel >= 242) & ((max_channel - min_channel) <= 18))
+        | ((array[:, :, 0] >= 248) & (array[:, :, 1] >= 248) & (array[:, :, 2] >= 248))
+    ).astype("uint8")
+
+    _, labels = cv2.connectedComponents(background_candidate)
+    border_labels = np.unique(
+        np.concatenate([labels[0, :], labels[-1, :], labels[:, 0], labels[:, -1]])
+    )
+    border_labels = border_labels[border_labels != 0]
+
+    if border_labels.size == 0:
+        foreground = background_candidate == 0
+    else:
+        background_mask = np.isin(labels, border_labels)
+        foreground = ~background_mask
+
+    alpha = (foreground.astype("uint8") * 255)
+    alpha = cv2.GaussianBlur(alpha, (0, 0), sigmaX=1.4, sigmaY=1.4)
+
+    ys, xs = np.where(alpha > 10)
+    if xs.size == 0 or ys.size == 0:
+        return rgb.convert("RGBA")
+
+    pad = max(6, int(max(rgb.size) * 0.02))
+    left = max(int(xs.min()) - pad, 0)
+    top = max(int(ys.min()) - pad, 0)
+    right = min(int(xs.max()) + pad + 1, rgb.size[0])
+    bottom = min(int(ys.max()) + pad + 1, rgb.size[1])
+
+    rgba = np.dstack([array, alpha])
+    return Image.fromarray(rgba, mode="RGBA").crop((left, top, right, bottom))
+
+
+def _placement_width_ratio(kind: Literal["representative", "lifestyle"], category: str) -> float:
+    ratio_map = {
+        "plate": {"representative": 0.44, "lifestyle": 0.34},
+        "bowl": {"representative": 0.34, "lifestyle": 0.28},
+        "cup": {"representative": 0.28, "lifestyle": 0.23},
+        "glassware": {"representative": 0.26, "lifestyle": 0.22},
+        "tray": {"representative": 0.52, "lifestyle": 0.4},
+        "cutlery": {"representative": 0.34, "lifestyle": 0.28},
+    }
+
+    category_ratio = ratio_map.get(category, {"representative": 0.3, "lifestyle": 0.24})
+    return category_ratio[kind]
+
+
+def _analyze_scene_context(scene_image, focus_box: tuple[int, int, int, int]) -> dict[str, float]:
+    import cv2
+    import numpy as np
+
+    crop = scene_image.crop(focus_box).convert("RGB")
+    array = np.array(crop)
+
+    if array.size == 0:
+        return {
+            "brightness": 0.58,
+            "warmth": 0.0,
+            "light_x": 0.0,
+            "light_y": -0.25,
+            "angle": 0.0,
+        }
+
+    rgb_mean = array.mean(axis=(0, 1))
+    brightness = float(rgb_mean.mean() / 255.0)
+    warmth = float((rgb_mean[0] - rgb_mean[2]) / 255.0)
+
+    left_brightness = float(array[:, : max(1, array.shape[1] // 2), :].mean() / 255.0)
+    right_brightness = float(array[:, array.shape[1] // 2 :, :].mean() / 255.0)
+    top_brightness = float(array[: max(1, array.shape[0] // 2), :, :].mean() / 255.0)
+    bottom_brightness = float(array[array.shape[0] // 2 :, :, :].mean() / 255.0)
+
+    gray = cv2.cvtColor(array, cv2.COLOR_RGB2GRAY)
+    edges = cv2.Canny(gray, 70, 180)
+    min_line = max(40, int(min(gray.shape[:2]) * 0.18))
+    lines = cv2.HoughLinesP(
+        edges,
+        1,
+        np.pi / 180,
+        threshold=28,
+        minLineLength=min_line,
+        maxLineGap=18,
+    )
+
+    weighted_angles: list[tuple[float, float]] = []
+    if lines is not None:
+        for line in lines[:, 0]:
+            x1, y1, x2, y2 = line
+            angle = float(np.degrees(np.arctan2(y2 - y1, x2 - x1)))
+            if abs(angle) <= 18:
+                length = float(np.hypot(x2 - x1, y2 - y1))
+                weighted_angles.append((angle, length))
+
+    if weighted_angles:
+        total_weight = sum(weight for _, weight in weighted_angles)
+        dominant_angle = sum(angle * weight for angle, weight in weighted_angles) / max(total_weight, 1e-6)
+    else:
+        dominant_angle = 0.0
+
+    return {
+        "brightness": brightness,
+        "warmth": warmth,
+        "light_x": right_brightness - left_brightness,
+        "light_y": top_brightness - bottom_brightness,
+        "angle": dominant_angle,
+    }
+
+
+def _alpha_crop(image):
+    alpha = image.getchannel("A")
+    bbox = alpha.getbbox()
+    return image.crop(bbox) if bbox else image
+
+
+def _apply_scene_geometry(cutout, *, kind: Literal["representative", "lifestyle"], angle: float):
+    from PIL import Image
+
+    adjusted = cutout
+    if kind == "lifestyle":
+        shear = max(-0.08, min(0.08, angle / 160))
+        width, height = adjusted.size
+        output_width = int(width + abs(shear) * height)
+        offset = max(0, int(-shear * height)) if shear < 0 else 0
+        adjusted = adjusted.transform(
+            (max(output_width, width), height),
+            Image.Transform.AFFINE,
+            (1, shear, offset, 0, 1, 0),
+            resample=Image.Resampling.BICUBIC,
+            fillcolor=(0, 0, 0, 0),
+        )
+        adjusted = _alpha_crop(adjusted)
+
+    rotation = max(-4.0, min(4.0, angle * (0.22 if kind == "lifestyle" else 0.12)))
+    if abs(rotation) >= 0.2:
+        adjusted = adjusted.rotate(
+            rotation,
+            resample=Image.Resampling.BICUBIC,
+            expand=True,
+            fillcolor=(0, 0, 0, 0),
+        )
+        adjusted = _alpha_crop(adjusted)
+
+    return adjusted
+
+
+def _apply_scene_lighting(cutout, context: dict[str, float]):
+    from PIL import Image, ImageChops, ImageEnhance
+
+    rgba = cutout.convert("RGBA")
+    alpha = rgba.getchannel("A")
+    rgb = rgba.convert("RGB")
+
+    brightness_factor = max(0.88, min(1.16, 0.9 + context["brightness"] * 0.34))
+    contrast_factor = max(0.94, min(1.08, 0.96 + abs(context["light_x"]) * 0.22))
+    saturation_factor = max(0.92, min(1.06, 0.98 + context["warmth"] * 0.06))
+
+    rgb = ImageEnhance.Brightness(rgb).enhance(brightness_factor)
+    rgb = ImageEnhance.Contrast(rgb).enhance(contrast_factor)
+    rgb = ImageEnhance.Color(rgb).enhance(saturation_factor)
+
+    warmth = context["warmth"]
+    if abs(warmth) > 0.015:
+        tint = (236, 181, 118) if warmth > 0 else (174, 196, 224)
+        tint_strength = min(0.12, abs(warmth) * 0.45)
+        rgb = Image.blend(rgb, Image.new("RGB", rgb.size, tint), tint_strength)
+
+    lit = rgb.convert("RGBA")
+    lit.putalpha(alpha)
+
+    wrap_layer = Image.new("RGBA", lit.size, (0, 0, 0, 0))
+    wrap_alpha = Image.new("L", lit.size, 0)
+    wrap_pixels = wrap_alpha.load()
+    width, height = lit.size
+    light_x = context["light_x"]
+    light_y = context["light_y"]
+    from_left = light_x <= 0
+    top_lit = light_y >= 0
+    for x in range(width):
+        horizontal = 1 - (x / max(width - 1, 1) if from_left else (width - 1 - x) / max(width - 1, 1))
+        for y in range(height):
+            vertical = 1 - (y / max(height - 1, 1) if top_lit else (height - 1 - y) / max(height - 1, 1))
+            intensity = max(0.0, min(1.0, horizontal * 0.7 + vertical * 0.3))
+            wrap_pixels[x, y] = int(intensity * 38)
+
+    wrap_color = (255, 236, 214, 255) if warmth >= 0 else (225, 236, 248, 255)
+    wrap_layer.paste(wrap_color, mask=ImageChops.multiply(alpha, wrap_alpha))
+    return Image.alpha_composite(lit, wrap_layer)
+
+
+def _compose_identity_locked_image(
+    *,
+    scene_image,
+    product_image,
+    kind: Literal["representative", "lifestyle"],
+    category: str,
+):
+    from PIL import Image, ImageChops, ImageDraw, ImageFilter
+
+    scene = scene_image.convert("RGBA")
+    cutout = _extract_product_cutout(product_image)
+
+    scene_width, scene_height = scene.size
+    cutout_width, cutout_height = cutout.size
+    width_ratio = _placement_width_ratio(kind, category)
+    target_width = max(160, int(scene_width * width_ratio))
+    target_height = max(120, int(target_width * (cutout_height / max(cutout_width, 1))))
+
+    max_height = int(scene_height * (0.42 if kind == "representative" else 0.34))
+    if target_height > max_height:
+        scale = max_height / max(target_height, 1)
+        target_width = int(target_width * scale)
+        target_height = max_height
+
+    center_x = scene_width // 2
+    bottom_y = int(scene_height * (0.76 if kind == "representative" else 0.8))
+    rough_x = center_x - target_width // 2
+    rough_y = bottom_y - target_height
+
+    context_box = (
+        max(rough_x - int(target_width * 0.7), 0),
+        max(rough_y - int(target_height * 0.45), 0),
+        min(rough_x + int(target_width * 1.7), scene_width),
+        min(bottom_y + int(target_height * 0.2), scene_height),
+    )
+    scene_context = _analyze_scene_context(scene, context_box)
+    adjusted_cutout = _apply_scene_geometry(cutout, kind=kind, angle=scene_context["angle"])
+    resized_cutout = adjusted_cutout.resize((target_width, target_height), Image.Resampling.LANCZOS)
+    resized_cutout = _apply_scene_lighting(resized_cutout, scene_context)
+
+    target_width, target_height = resized_cutout.size
+    product_x = center_x - target_width // 2
+    product_y = bottom_y - target_height
+
+    blur_pad_x = int(target_width * 0.18)
+    blur_pad_y = int(target_height * 0.16)
+    blur_box = (
+        max(product_x - blur_pad_x, 0),
+        max(product_y - blur_pad_y, 0),
+        min(product_x + target_width + blur_pad_x, scene_width),
+        min(product_y + target_height + blur_pad_y, scene_height),
+    )
+    blurred_patch = scene.crop(blur_box).filter(
+        ImageFilter.GaussianBlur(radius=max(8, int(target_width * 0.03)))
+    )
+    scene.paste(blurred_patch, blur_box)
+
+    shadow_layer = Image.new("RGBA", scene.size, (0, 0, 0, 0))
+    alpha = resized_cutout.getchannel("A")
+    shadow_color = (
+        int(max(18, min(78, 44 + scene_context["warmth"] * 64))),
+        int(max(14, min(64, 34 + scene_context["warmth"] * 38))),
+        int(max(12, min(58, 26 + scene_context["warmth"] * 22))),
+        255,
+    )
+    shadow_shape = Image.new("RGBA", resized_cutout.size, shadow_color)
+    shadow_shape.putalpha(alpha)
+    shadow_shape = shadow_shape.resize(
+        (target_width, max(20, int(target_height * 0.26))),
+        Image.Resampling.BICUBIC,
+    )
+    shadow_shape = shadow_shape.filter(
+        ImageFilter.GaussianBlur(radius=max(10, int(target_width * 0.05)))
+    )
+    shadow_opacity = int(max(72, min(132, 84 + (0.62 - scene_context["brightness"]) * 120)))
+    shadow_alpha = shadow_shape.getchannel("A").point(lambda p: min(255, int(p * shadow_opacity / 255)))
+    shadow_shape.putalpha(shadow_alpha)
+
+    shadow_dx = int(max(-target_width * 0.08, min(target_width * 0.08, -scene_context["light_x"] * target_width * 0.22)))
+    shadow_dy = int(max(8, target_height * (0.03 + max(0.0, 0.08 - scene_context["light_y"] * 0.04))))
+    shadow_x = product_x + int(target_width * 0.02) + shadow_dx
+    shadow_y = product_y + target_height - int(shadow_shape.size[1] * 0.45) + shadow_dy
+    shadow_layer.alpha_composite(shadow_shape, (shadow_x, shadow_y))
+
+    occlusion_layer = Image.new("RGBA", scene.size, (0, 0, 0, 0))
+    occlusion_draw = ImageDraw.Draw(occlusion_layer)
+    occlusion_box = (
+        product_x + int(target_width * 0.18),
+        product_y + int(target_height * 0.83),
+        product_x + int(target_width * 0.82),
+        product_y + int(target_height * 0.96),
+    )
+    occlusion_draw.ellipse(occlusion_box, fill=(38, 26, 20, 92))
+    occlusion_layer = occlusion_layer.filter(
+        ImageFilter.GaussianBlur(radius=max(8, int(target_width * 0.035)))
+    )
+
+    scene = Image.alpha_composite(scene, shadow_layer)
+    scene = Image.alpha_composite(scene, occlusion_layer)
+
+    edge_soften = Image.new("L", resized_cutout.size, 0)
+    edge_soften_draw = ImageDraw.Draw(edge_soften)
+    edge_soften_draw.rounded_rectangle(
+        (0, 0, resized_cutout.size[0], resized_cutout.size[1]),
+        radius=max(12, int(min(resized_cutout.size) * 0.08)),
+        fill=255,
+    )
+    feathered_alpha = ImageChops.multiply(resized_cutout.getchannel("A"), edge_soften.filter(ImageFilter.GaussianBlur(2)))
+    softened = resized_cutout.copy()
+    softened.putalpha(feathered_alpha)
+    scene.alpha_composite(softened, (product_x, product_y))
+
+    return scene.convert("RGB")
+
+
 def _torch_dtype(torch_module, device: str):
     if device in {"cuda", "mps"}:
         return torch_module.float16
@@ -528,6 +845,12 @@ def generate(payload: GenerateRequest, authorization: Optional[str] = Header(def
                     generator=generator,
                     **({"ip_adapter_image": style_image} if IP_ADAPTER_ENABLED else {}),
                 ).images[0]
+                result = _compose_identity_locked_image(
+                    scene_image=result,
+                    product_image=product_image,
+                    kind=kind,
+                    category=payload.product.category,
+                )
         except Exception as error:  # pragma: no cover - runtime path
             _LAST_RUNTIME_ERROR = str(error)
             _clear_device_cache(torch)
