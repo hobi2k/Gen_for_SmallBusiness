@@ -52,22 +52,22 @@ function productPlacementDirective(product: ProductAnalysis): string {
     .toLowerCase();
 
   if (/(tray|쟁반|트레이|plate|접시)/.test(descriptor)) {
-    return "empty dining tabletop seen clearly from a gentle top-front angle, broad flat placement area, object intended to rest fully on the table surface";
+    return "empty kitchen or dining tabletop seen clearly from a gentle top-front angle, broad flat placement zone reserved in the lower foreground, object intended to rest fully on the table surface, no props or furniture inside that reserved zone";
   }
 
   if (/(bowl|볼)/.test(descriptor)) {
-    return "empty dining tabletop with a placemat or table surface visible, placement area centered on the table, object intended to sit stably on the tabletop";
+    return "empty kitchen or dining tabletop with a placemat or clear table surface visible, reserved placement zone centered on the table, object intended to sit stably on the tabletop, no props inside the reserved zone";
   }
 
   if (/(cup|glass|glassware|컵|유리잔)/.test(descriptor)) {
-    return "empty dining tabletop or coaster area visible in the lower foreground, placement zone near the front-center of the table, object intended to stand upright on the table surface";
+    return "empty kitchen or dining tabletop or coaster area visible in the lower foreground, reserved placement zone near the front-center of the table, object intended to stand upright on the table surface, no cups or decor items inside the reserved zone";
   }
 
   if (/(cutlery|fork|knife|spoon|커트러리|포크|나이프|수저)/.test(descriptor)) {
-    return "empty dining tabletop with a horizontal setting area, object intended to rest flat on the table surface near a place setting";
+    return "empty kitchen or dining tabletop with a horizontal setting area reserved in the foreground, object intended to rest flat on the table surface near a place setting, no plates or bowls inside the reserved zone";
   }
 
-  return "empty dining tabletop clearly visible in the lower foreground, object intended to rest on the table surface";
+  return "empty kitchen or dining tabletop clearly visible in the lower foreground, reserved placement zone on the table surface, no foreground props inside the reserved zone";
 }
 
 const COPY_SCHEMA = JSON.stringify(
@@ -229,10 +229,13 @@ function buildRepresentativePrompt(style: StylePreset, product: ProductAnalysis)
     "single kitchen or dining space only",
     "kitchen cabinetry or dining details kept secondary",
     "clean empty placement area on the dining table",
+    "reserved product placement zone on the tabletop must stay empty",
     "tabletop dominates the lower half of the frame",
+    "camera height aligned to the tabletop, not the whole room",
     "single setup only",
     "do not render the product itself",
     "no duplicate object",
+    "no chairs, tableware, flowers, lamps, or decor inside the reserved product zone",
     "camera focused on the table surface, not the room",
     "centered composition",
     "clean commercial lighting",
@@ -254,10 +257,12 @@ function buildLifestylePrompt(style: StylePreset, product: ProductAnalysis): str
     `allowed accent props: ${style.sceneProfile.accentProps.join(", ")}`,
     "single kitchen or dining space only",
     "clean placement area reserved on the dining table",
+    "reserved product placement zone on the tabletop must stay empty",
     "tabletop clearly visible in the lower foreground",
     "kitchen or dining table is the hero surface",
     "do not render the product itself",
     "no duplicate object",
+    "no cups, plates, bowls, trays, flowers, or decor inside the reserved product zone",
     "natural dining-table perspective",
     "props secondary",
     "background only for later product compositing",

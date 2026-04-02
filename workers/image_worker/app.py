@@ -671,6 +671,300 @@ def _find_table_anchor(
     }
 
 
+def _dedupe_surface_candidates(candidates: list[dict[str, float]]) -> list[dict[str, float]]:
+    deduped: list[dict[str, float]] = []
+
+    for candidate in candidates:
+        duplicate = False
+        for existing in deduped:
+            y_gap = abs(candidate["y"] - existing["y"])
+            left = max(candidate["left"], existing["left"])
+            right = min(candidate["right"], existing["right"])
+            overlap = max(0.0, right - left)
+            min_width = max(1.0, min(candidate["width"], existing["width"]))
+            if y_gap <= 26 and overlap / min_width >= 0.58:
+                duplicate = True
+                break
+
+        if not duplicate:
+            deduped.append(candidate)
+
+    return deduped
+
+
+def _find_tabletop_candidates(
+    scene_image,
+    *,
+    kind: Literal["representative", "lifestyle"],
+    product: ProductPayload,
+) -> list[dict[str, float]]:
+    import cv2
+    import numpy as np
+
+    rgb = scene_image.convert("RGB")
+    array = np.array(rgb)
+    height, width = array.shape[:2]
+    profile = _placement_profile(product)
+
+    search_top = int(
+        height
+        * (
+            0.56
+            if profile == "flat"
+            else 0.52
+            if kind == "representative"
+            else 0.58
+        )
+    )
+    region = array[search_top:, :, :]
+    if region.size == 0:
+        return []
+
+    gray = cv2.cvtColor(region, cv2.COLOR_RGB2GRAY)
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
+    edges = cv2.Canny(gray, 55, 145)
+    lines = cv2.HoughLinesP(
+        edges,
+        1,
+        np.pi / 180,
+        threshold=34,
+        minLineLength=max(120, int(width * 0.16)),
+        maxLineGap=28,
+    )
+
+    candidates: list[dict[str, float]] = []
+    if lines is not None:
+        for line in lines[:, 0]:
+            x1, y1, x2, y2 = line
+            angle = float(np.degrees(np.arctan2(y2 - y1, x2 - x1)))
+            if abs(angle) > 14:
+                continue
+
+            left = float(min(x1, x2))
+            right = float(max(x1, x2))
+            line_width = right - left
+            if line_width < width * 0.14:
+                continue
+
+            line_y = float(search_top + (y1 + y2) / 2)
+            center_x = float((left + right) / 2)
+            center_bias = 1 - abs(center_x / max(width, 1) - 0.5)
+            lower_bias = min(1.0, max(0.0, (line_y / max(height, 1) - 0.52) / 0.32))
+            width_bias = min(1.0, line_width / max(width * 0.42, 1))
+            score = line_width * (0.34 + center_bias * 0.18 + lower_bias * 0.28 + width_bias * 0.2)
+
+            padding_x = max(18, int(width * 0.03))
+            placement_height = max(120, int(height * (0.2 if profile == "flat" else 0.17)))
+            candidate = {
+                "left": max(0.0, left - padding_x),
+                "right": min(float(width), right + padding_x),
+                "top": max(0.0, line_y - placement_height),
+                "bottom": min(float(height), line_y + max(18, int(height * 0.03))),
+                "x": center_x,
+                "y": line_y,
+                "width": min(float(width), right + padding_x) - max(0.0, left - padding_x),
+                "height": placement_height + max(18, int(height * 0.03)),
+                "line_width": line_width,
+                "angle": angle,
+                "score": score,
+            }
+            candidates.append(candidate)
+
+    candidates.sort(key=lambda item: item["score"], reverse=True)
+    return _dedupe_surface_candidates(candidates)[:8]
+
+
+def _target_surface_width_factor(
+    *,
+    profile: Literal["flat", "upright", "linear", "generic"],
+    kind: Literal["representative", "lifestyle"],
+) -> float:
+    if profile == "flat":
+        return 0.48 if kind == "representative" else 0.42
+    if profile == "upright":
+        return 0.26 if kind == "representative" else 0.2
+    if profile == "linear":
+        return 0.52 if kind == "representative" else 0.44
+    return 0.3 if kind == "representative" else 0.24
+
+
+def _score_empty_surface(
+    *,
+    edge_map,
+    luminance_map,
+    rect: tuple[int, int, int, int],
+) -> float:
+    import numpy as np
+
+    x0, y0, x1, y1 = rect
+    x0 = max(0, x0)
+    y0 = max(0, y0)
+    x1 = min(edge_map.shape[1], x1)
+    y1 = min(edge_map.shape[0], y1)
+
+    if x1 - x0 < 24 or y1 - y0 < 24:
+        return -1.0
+
+    edge_region = edge_map[y0:y1, x0:x1]
+    luminance_region = luminance_map[y0:y1, x0:x1]
+    if edge_region.size == 0 or luminance_region.size == 0:
+        return -1.0
+
+    edge_density = float((edge_region > 0).mean())
+    luminance_std = float(np.std(luminance_region) / 255.0)
+    flatness = 1.0 - min(1.0, edge_density * 2.2 + luminance_std * 0.95)
+    return flatness
+
+
+def _fallback_placement_region(
+    *,
+    scene_image,
+    kind: Literal["representative", "lifestyle"],
+    product: ProductPayload,
+    target_width: int,
+    target_height: int,
+) -> dict[str, float]:
+    scene_width, scene_height = scene_image.size
+    anchor = _find_table_anchor(scene_image, kind=kind, product=product)
+    profile = _placement_profile(product)
+    center_x = int(anchor["x"]) if anchor["confidence"] > 0 else scene_width // 2
+    bottom_y = (
+        int(anchor["y"])
+        if anchor["confidence"] > 0
+        else int(scene_height * (0.84 if profile == "flat" else 0.8 if kind == "representative" else 0.84))
+    )
+    return {
+        "center_x": float(center_x),
+        "bottom_y": float(bottom_y),
+        "target_width": float(target_width),
+        "target_height": float(target_height),
+        "angle": 0.0,
+        "confidence": float(anchor["confidence"]),
+        "surface_left": 0.0,
+        "surface_right": float(scene_width),
+        "surface_top": max(0.0, float(bottom_y - target_height - 40)),
+        "surface_bottom": min(float(scene_height), float(bottom_y + 24)),
+    }
+
+
+def _select_placement_region(
+    *,
+    scene_image,
+    candidates: list[dict[str, float]],
+    kind: Literal["representative", "lifestyle"],
+    product: ProductPayload,
+    cutout_size: tuple[int, int],
+    base_target_width: int,
+) -> dict[str, float]:
+    import cv2
+    import numpy as np
+
+    scene_width, scene_height = scene_image.size
+    if not candidates:
+        cutout_width, cutout_height = cutout_size
+        base_height = max(120, int(base_target_width * (cutout_height / max(cutout_width, 1))))
+        return _fallback_placement_region(
+            scene_image=scene_image,
+            kind=kind,
+            product=product,
+            target_width=base_target_width,
+            target_height=base_height,
+        )
+
+    profile = _placement_profile(product)
+    surface_factor = _target_surface_width_factor(profile=profile, kind=kind)
+    cutout_width, cutout_height = cutout_size
+    cutout_aspect = cutout_height / max(cutout_width, 1)
+
+    rgb = scene_image.convert("RGB")
+    array = np.array(rgb)
+    luminance = cv2.cvtColor(array, cv2.COLOR_RGB2GRAY)
+    edge_map = cv2.Canny(cv2.GaussianBlur(luminance, (5, 5), 0), 55, 145)
+
+    best_region: Optional[dict[str, float]] = None
+    best_score = -10.0
+    max_candidate_score = max(candidate["score"] for candidate in candidates)
+
+    for candidate in candidates:
+        candidate_width = int(candidate["right"] - candidate["left"])
+        surface_target_width = max(120, int(candidate_width * surface_factor))
+        target_width = min(int(candidate_width * 0.82), max(base_target_width, surface_target_width))
+        target_height = max(110, int(target_width * cutout_aspect))
+        free_height = int(candidate["y"] - candidate["top"])
+        if free_height > 0 and target_height > int(free_height * 0.86):
+            shrink = int(free_height * 0.86)
+            target_height = max(90, shrink)
+            target_width = max(110, int(target_height / max(cutout_aspect, 1e-6)))
+
+        contact_lift = max(1, int(target_height * (0.012 if profile == "flat" else 0.02)))
+        start_x = int(candidate["left"] + target_width / 2)
+        end_x = int(candidate["right"] - target_width / 2)
+        if end_x < start_x:
+            continue
+
+        step = max(12, int(target_width * 0.18))
+        for center_x in range(start_x, end_x + 1, step):
+            product_x = center_x - target_width // 2
+            product_y = int(candidate["y"] - target_height - contact_lift)
+            scan_rect = (
+                product_x - int(target_width * 0.08),
+                product_y - int(target_height * 0.06),
+                product_x + int(target_width * 1.08),
+                product_y + int(target_height * 1.02),
+            )
+            empty_score = _score_empty_surface(
+                edge_map=edge_map,
+                luminance_map=luminance,
+                rect=scan_rect,
+            )
+            if empty_score < 0:
+                continue
+
+            center_bias = 1 - abs((center_x / max(scene_width, 1)) - 0.5)
+            lower_bias = min(1.0, max(0.0, (candidate["y"] / max(scene_height, 1) - 0.54) / 0.3))
+            candidate_strength = candidate["score"] / max(max_candidate_score, 1e-6)
+            width_bias = min(1.0, candidate_width / max(scene_width * 0.42, 1))
+            score = (
+                empty_score * 0.42
+                + candidate_strength * 0.26
+                + lower_bias * 0.14
+                + center_bias * 0.1
+                + width_bias * 0.08
+            )
+
+            if profile == "upright":
+                score += 0.05 * center_bias
+            elif profile == "flat":
+                score += 0.04 * width_bias
+
+            if score > best_score:
+                best_score = score
+                best_region = {
+                    "center_x": float(center_x),
+                    "bottom_y": float(candidate["y"]),
+                    "target_width": float(target_width),
+                    "target_height": float(target_height),
+                    "angle": float(candidate["angle"]),
+                    "confidence": float(score),
+                    "surface_left": float(candidate["left"]),
+                    "surface_right": float(candidate["right"]),
+                    "surface_top": float(candidate["top"]),
+                    "surface_bottom": float(candidate["bottom"]),
+                }
+
+    if best_region is not None:
+        return best_region
+
+    base_height = max(120, int(base_target_width * cutout_aspect))
+    return _fallback_placement_region(
+        scene_image=scene_image,
+        kind=kind,
+        product=product,
+        target_width=base_target_width,
+        target_height=base_height,
+    )
+
+
 def _alpha_crop(image):
     alpha = image.getchannel("A")
     bbox = alpha.getbbox()
@@ -763,6 +1057,91 @@ def _apply_scene_lighting(cutout, context: dict[str, float]):
     return Image.alpha_composite(lit, wrap_layer)
 
 
+def _refine_composited_roi(
+    *,
+    scene,
+    original_scene,
+    product_layer,
+    product_x: int,
+    product_y: int,
+    context: dict[str, float],
+):
+    import cv2
+    import numpy as np
+    from PIL import Image, ImageChops, ImageFilter
+
+    scene_rgba = scene.convert("RGBA")
+    original_rgba = original_scene.convert("RGBA")
+    alpha = product_layer.getchannel("A")
+    if alpha.getbbox() is None:
+        return scene_rgba
+
+    pad_x = max(24, int(product_layer.size[0] * 0.2))
+    pad_y = max(24, int(product_layer.size[1] * 0.18))
+    roi_box = (
+        max(0, product_x - pad_x),
+        max(0, product_y - pad_y),
+        min(scene_rgba.size[0], product_x + product_layer.size[0] + pad_x),
+        min(scene_rgba.size[1], product_y + product_layer.size[1] + pad_y),
+    )
+
+    if roi_box[2] - roi_box[0] < 32 or roi_box[3] - roi_box[1] < 32:
+        return scene_rgba
+
+    product_roi = Image.new("RGBA", (roi_box[2] - roi_box[0], roi_box[3] - roi_box[1]), (0, 0, 0, 0))
+    product_roi.alpha_composite(product_layer, (product_x - roi_box[0], product_y - roi_box[1]))
+    product_alpha = product_roi.getchannel("A")
+    if product_alpha.getbbox() is None:
+        return scene_rgba
+
+    base_roi = original_rgba.crop(roi_box).convert("RGBA")
+    product_rgb = np.array(product_roi.convert("RGB")).astype(np.float32)
+    background_rgb = np.array(base_roi.convert("RGB")).astype(np.float32)
+    alpha_array = np.array(product_alpha).astype(np.float32) / 255.0
+
+    blurred_alpha = product_alpha.filter(ImageFilter.GaussianBlur(radius=max(4, int(product_layer.size[0] * 0.012))))
+    edge_mask_image = ImageChops.subtract(blurred_alpha, product_alpha)
+    edge_mask = np.array(edge_mask_image).astype(np.float32) / 255.0
+
+    alpha_mask = alpha_array > 0.04
+    edge_mask_bool = edge_mask > 0.02
+    if not alpha_mask.any():
+        return scene_rgba
+
+    edge_background = background_rgb[edge_mask_bool] if edge_mask_bool.any() else background_rgb[alpha_mask]
+    edge_product = product_rgb[edge_mask_bool] if edge_mask_bool.any() else product_rgb[alpha_mask]
+    bg_mean = edge_background.mean(axis=0)
+    product_mean = edge_product.mean(axis=0)
+    mean_shift = (bg_mean - product_mean) * 0.18
+
+    product_rgb[alpha_mask] = np.clip(product_rgb[alpha_mask] + mean_shift, 0, 255)
+    if edge_mask_bool.any():
+        product_rgb[edge_mask_bool] = np.clip(product_rgb[edge_mask_bool] * 0.76 + bg_mean * 0.24, 0, 255)
+
+    sharpness = cv2.Laplacian(cv2.cvtColor(background_rgb.astype(np.uint8), cv2.COLOR_RGB2GRAY), cv2.CV_32F).var()
+    harmonized = Image.fromarray(product_rgb.astype(np.uint8), mode="RGB").convert("RGBA")
+    harmonized.putalpha(product_alpha)
+    if sharpness < 28:
+        harmonized = harmonized.filter(ImageFilter.GaussianBlur(radius=0.8))
+        harmonized.putalpha(product_alpha)
+
+    noise_strength = max(0.03, min(0.08, (0.72 - context["brightness"]) * 0.08 + 0.04))
+    noise = np.random.normal(0.0, 10.0, product_rgb.shape).astype(np.float32)
+    noisy_rgb = np.array(harmonized.convert("RGB")).astype(np.float32)
+    noisy_rgb[alpha_mask] = np.clip(noisy_rgb[alpha_mask] + noise[alpha_mask] * noise_strength, 0, 255)
+    harmonized = Image.fromarray(noisy_rgb.astype(np.uint8), mode="RGB").convert("RGBA")
+    harmonized.putalpha(product_alpha)
+
+    refined_scene = scene_rgba.copy()
+    refined_scene.paste(
+        Image.new("RGBA", harmonized.size, (0, 0, 0, 0)),
+        box=(product_x, product_y),
+        mask=product_alpha,
+    )
+    refined_scene.alpha_composite(harmonized, (product_x, product_y))
+    return refined_scene
+
+
 def _compose_identity_locked_image(
     *,
     scene_image,
@@ -773,13 +1152,24 @@ def _compose_identity_locked_image(
     from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
     scene = scene_image.convert("RGBA")
+    original_scene = scene.copy()
     cutout = _extract_product_cutout(product_image)
 
     scene_width, scene_height = scene.size
     cutout_width, cutout_height = cutout.size
     width_ratio = _dynamic_placement_width_ratio(kind, product, cutout.size)
     target_width = max(160, int(scene_width * width_ratio))
-    target_height = max(120, int(target_width * (cutout_height / max(cutout_width, 1))))
+    candidates = _find_tabletop_candidates(scene, kind=kind, product=product)
+    placement = _select_placement_region(
+        scene_image=scene,
+        candidates=candidates,
+        kind=kind,
+        product=product,
+        cutout_size=cutout.size,
+        base_target_width=target_width,
+    )
+    target_width = int(placement["target_width"])
+    target_height = int(placement["target_height"])
 
     max_height = int(scene_height * (0.42 if kind == "representative" else 0.34))
     if target_height > max_height:
@@ -787,29 +1177,24 @@ def _compose_identity_locked_image(
         target_width = int(target_width * scale)
         target_height = max_height
 
-    anchor = _find_table_anchor(scene, kind=kind, product=product)
-    center_x = int(anchor["x"]) if anchor["confidence"] > 0 else scene_width // 2
+    center_x = int(placement["center_x"])
     profile = _placement_profile(product)
-    bottom_y = (
-        int(anchor["y"])
-        if anchor["confidence"] > 0
-        else int(scene_height * (0.84 if profile == "flat" else 0.8 if kind == "representative" else 0.84))
-    )
+    bottom_y = int(placement["bottom_y"])
     bottom_y = max(int(scene_height * 0.64), min(int(scene_height * 0.92), bottom_y))
     rough_x = center_x - target_width // 2
     rough_y = bottom_y - target_height
 
     context_box = (
-        max(rough_x - int(target_width * 0.7), 0),
-        max(rough_y - int(target_height * 0.45), 0),
-        min(rough_x + int(target_width * 1.7), scene_width),
-        min(bottom_y + int(target_height * 0.2), scene_height),
+        max(int(placement["surface_left"]) - int(target_width * 0.2), 0),
+        max(int(placement["surface_top"]) - int(target_height * 0.08), 0),
+        min(int(placement["surface_right"]) + int(target_width * 0.2), scene_width),
+        min(int(placement["surface_bottom"]) + int(target_height * 0.08), scene_height),
     )
     scene_context = _analyze_scene_context(scene, context_box)
     adjusted_cutout = _apply_scene_geometry(
         cutout,
         kind=kind,
-        angle=scene_context["angle"],
+        angle=(scene_context["angle"] * 0.45) + (placement["angle"] * 0.55),
         product=product,
     )
     resized_cutout = adjusted_cutout.resize((target_width, target_height), Image.Resampling.LANCZOS)
@@ -892,6 +1277,15 @@ def _compose_identity_locked_image(
     softened = resized_cutout.copy()
     softened.putalpha(feathered_alpha)
     scene.alpha_composite(softened, (product_x, product_y))
+
+    scene = _refine_composited_roi(
+        scene=scene,
+        original_scene=original_scene,
+        product_layer=softened,
+        product_x=product_x,
+        product_y=product_y,
+        context=scene_context,
+    )
 
     return scene.convert("RGB")
 
