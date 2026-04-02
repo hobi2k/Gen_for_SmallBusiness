@@ -78,6 +78,15 @@ export async function POST(request: Request) {
         categoryLabel: analysis.categoryLabel,
         recommendationFallbackUsed: recommendationResult.fallbackUsed,
         fallbackUsed: recommendationResult.fallbackUsed
+      }, {
+        metadata: {
+          analysis: {
+            source: analysis.analysisSource
+          }
+        },
+        traceMetadata: {
+          analysis_source: analysis.analysisSource
+        }
       });
 
       await logEvent(
@@ -106,6 +115,9 @@ export async function POST(request: Request) {
           },
           generatedAt,
           extra: {
+            analysis: {
+              source: analysis.analysisSource
+            },
             productSnapshot: analysis,
             allStyleScores: recommendationResult.allStyles.map((item) => ({
               styleId: item.styleId,

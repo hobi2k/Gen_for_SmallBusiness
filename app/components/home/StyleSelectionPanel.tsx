@@ -14,6 +14,19 @@ interface StyleSelectionPanelProps {
   onGenerate: () => Promise<void> | void;
 }
 
+function analysisSourceLabel(source: ProductAnalysis["analysisSource"]) {
+  switch (source) {
+    case "seed":
+      return "시드";
+    case "vision":
+      return "LLM 비전";
+    case "hybrid":
+      return "하이브리드";
+    default:
+      return "규칙 기반";
+  }
+}
+
 interface RecommendationCardProps {
   recommendation: StyleRecommendation;
   selected: boolean;
@@ -124,6 +137,10 @@ export function StyleSelectionPanel({
         <div className="mini-card">
           <strong>전체 톤</strong>
           <span>{surfaceToneLabel}</span>
+        </div>
+        <div className="mini-card">
+          <strong>분석 소스</strong>
+          <span>{analysisSourceLabel(analysis.analysisSource)}</span>
         </div>
       </div>
 

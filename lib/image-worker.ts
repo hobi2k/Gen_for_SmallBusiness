@@ -47,7 +47,7 @@ function workerBaseUrl() {
 }
 
 function defaultWorkerTimeoutMs() {
-  return process.env.IMAGE_WORKER_PROFILE === "lite-mps" ? 240000 : 45000;
+  return process.env.IMAGE_WORKER_PROFILE === "lite-mps" ? 480000 : 45000;
 }
 
 export function isImageWorkerConfigured() {

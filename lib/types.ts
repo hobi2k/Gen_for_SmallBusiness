@@ -37,6 +37,7 @@ export type ProductMaterialCue =
 
 export type ProductSurfaceTone = "warm" | "cool" | "neutral" | "none";
 export type ProductImageSource = "storage" | "references" | null;
+export type ProductAnalysisSource = "seed" | "heuristic" | "vision" | "hybrid";
 
 export type StyleId =
   | "modern-minimal"
@@ -53,6 +54,7 @@ export interface ProductAnalysis {
   fileName: string;
   mimeType: string;
   fileSize: number;
+  analysisSource: ProductAnalysisSource;
   sourceImageSource: ProductImageSource;
   sourceImageRelativePath: string | null;
   sourceImageUrl: string | null;

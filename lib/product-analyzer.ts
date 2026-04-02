@@ -1,12 +1,114 @@
+import "server-only";
+
 import {
   ProductAnalysis,
+  ProductAnalysisSource,
   ProductInputOverrides,
   ProductCategory,
   ProductColorCue,
   ProductMaterialCue,
   ProductSurfaceTone
 } from "@/lib/types";
+import { withLangfuseObservation } from "@/lib/langfuse";
 import { createUploadToken } from "@/lib/utils";
+
+const ANALYZER_MODEL = "gpt-5-nano";
+const ANALYZER_TIMEOUT_MS = 3200;
+const MAX_IMAGE_BYTES_FOR_ANALYZER = 6 * 1024 * 1024;
+
+const CATEGORY_VALUES: ProductCategory[] = [
+  "plate",
+  "bowl",
+  "cup",
+  "glassware",
+  "tray",
+  "cutlery",
+  "tableware",
+  "none"
+];
+
+const COLOR_VALUES: ProductColorCue[] = [
+  "white",
+  "ivory",
+  "cream",
+  "beige",
+  "brown",
+  "gray",
+  "black",
+  "clear",
+  "blue",
+  "green",
+  "pink",
+  "earthy",
+  "low-saturation",
+  "neutral",
+  "unknown"
+];
+
+const MATERIAL_VALUES: ProductMaterialCue[] = [
+  "ceramic",
+  "glass",
+  "wood",
+  "metal",
+  "stone",
+  "linen",
+  "mixed",
+  "none"
+];
+
+const SURFACE_TONE_VALUES: ProductSurfaceTone[] = ["warm", "cool", "neutral", "none"];
+
+interface HeuristicSnapshot {
+  category: ProductCategory;
+  categoryLabel: string;
+  colorHints: ProductColorCue[];
+  materialHints: ProductMaterialCue[];
+  surfaceTone: ProductSurfaceTone;
+}
+
+interface VisionAnalysisResult {
+  category?: ProductCategory;
+  colorHints?: ProductColorCue[];
+  materialHints?: ProductMaterialCue[];
+  surfaceTone?: ProductSurfaceTone;
+  materialNotes?: string;
+  visualSummary?: string;
+}
+
+function hasHeuristicSignals(snapshot: HeuristicSnapshot): boolean {
+  return (
+    snapshot.category !== "none" ||
+    !snapshot.colorHints.includes("unknown") ||
+    !snapshot.materialHints.includes("none") ||
+    snapshot.surfaceTone !== "none"
+  );
+}
+
+function hasVisionSignals(result: VisionAnalysisResult | null): boolean {
+  if (!result) {
+    return false;
+  }
+
+  return Boolean(
+    result.category ||
+      result.colorHints?.length ||
+      result.materialHints?.length ||
+      result.surfaceTone ||
+      normalizeOptionalText(result.materialNotes) ||
+      normalizeOptionalText(result.visualSummary)
+  );
+}
+
+function resolveAnalysisSource(
+  heuristic: HeuristicSnapshot,
+  visionAnalysis: VisionAnalysisResult | null
+): ProductAnalysisSource {
+  if (!hasVisionSignals(visionAnalysis)) {
+    return "heuristic";
+  }
+
+  return hasHeuristicSignals(heuristic) ? "hybrid" : "vision";
+}
 
 const CATEGORY_PATTERNS: Array<{
   category: ProductCategory;
@@ -205,23 +307,316 @@ function normalizeMaterialHints(materialHints: ProductMaterialCue[]): ProductMat
   return meaningful.length ? meaningful : ["none"];
 }
 
+function extractResponseText(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  const candidate = payload as {
+    output_text?: string;
+    output?: Array<{
+      content?: Array<{
+        text?: string;
+      }>;
+    }>;
+  };
+
+  if (typeof candidate.output_text === "string" && candidate.output_text.trim()) {
+    return candidate.output_text.trim();
+  }
+
+  for (const item of candidate.output ?? []) {
+    for (const content of item.content ?? []) {
+      if (typeof content.text === "string" && content.text.trim()) {
+        return content.text.trim();
+      }
+    }
+  }
+
+  return null;
+}
+
+function extractJsonObject(rawText: string): string | null {
+  const first = rawText.indexOf("{");
+  const last = rawText.lastIndexOf("}");
+
+  if (first === -1 || last === -1 || last <= first) {
+    return null;
+  }
+
+  return rawText.slice(first, last + 1);
+}
+
+function pickEnumValue<T extends string>(value: unknown, allowedValues: readonly T[]): T | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  return allowedValues.includes(value as T) ? (value as T) : undefined;
+}
+
+function pickEnumArray<T extends string>(value: unknown, allowedValues: readonly T[]): T[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const normalized = Array.from(
+    new Set(
+      value
+        .filter((item): item is string => typeof item === "string")
+        .filter((item): item is T => allowedValues.includes(item as T))
+    )
+  );
+
+  return normalized.length ? normalized : undefined;
+}
+
+function normalizeVisionText(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const normalized = value.trim();
+
+  if (!normalized) {
+    return undefined;
+  }
+
+  return normalized.length > 180 ? normalized.slice(0, 180).trim() : normalized;
+}
+
+function buildHeuristicSnapshot(file: File): HeuristicSnapshot {
+  const inferredCategory = inferCategory(file.name);
+  const colorHints = normalizeColorHints(inferColorHints(file.name));
+  const materialHints = normalizeMaterialHints(inferMaterialHints(file.name));
+
+  return {
+    category: inferredCategory.category,
+    categoryLabel: inferredCategory.categoryLabel,
+    colorHints,
+    materialHints,
+    surfaceTone: inferSurfaceTone(colorHints)
+  };
+}
+
+function shouldUseVisionAnalyzer(
+  file: File,
+  heuristic: HeuristicSnapshot,
+  overrides?: Partial<ProductInputOverrides>
+): boolean {
+  if (!process.env.OPENAI_API_KEY) {
+    return false;
+  }
+
+  if (file.size > MAX_IMAGE_BYTES_FOR_ANALYZER) {
+    return false;
+  }
+
+  const hasFullOverrides = Boolean(
+    overrides?.category &&
+      overrides?.colorHints?.length &&
+      overrides?.materialHints?.length &&
+      overrides?.surfaceTone &&
+      normalizeOptionalText(overrides?.materialNotes) &&
+      normalizeOptionalText(overrides?.visualSummary)
+  );
+
+  if (hasFullOverrides) {
+    return false;
+  }
+
+  return (
+    heuristic.category === "none" ||
+    heuristic.colorHints.includes("unknown") ||
+    heuristic.materialHints.includes("none") ||
+    heuristic.surfaceTone === "none"
+  );
+}
+
+function buildVisionAnalyzerPrompt(file: File, heuristic: HeuristicSnapshot): string {
+  return [
+    "당신은 리빙 소품 상품 사진 분석기다.",
+    "이미지를 우선 보고 판단하고, 파일명/기존 힌트는 보조 참고만 한다.",
+    "확실하지 않으면 None 또는 unknown을 사용한다.",
+    "출력은 JSON 객체만 반환한다.",
+    "허용 category: plate, bowl, cup, glassware, tray, cutlery, tableware, none",
+    "허용 colorHints: white, ivory, cream, beige, brown, gray, black, clear, blue, green, pink, earthy, low-saturation, neutral, unknown",
+    "허용 materialHints: ceramic, glass, wood, metal, stone, linen, mixed, none",
+    "허용 surfaceTone: warm, cool, neutral, none",
+    "materialNotes: 24자 이내 한국어 짧은 표현 또는 None",
+    "visualSummary: 60자 이내 한국어 한 문장 또는 None",
+    "JSON schema:",
+    "{",
+    '  "category": "string",',
+    '  "colorHints": ["string"],',
+    '  "materialHints": ["string"],',
+    '  "surfaceTone": "string",',
+    '  "materialNotes": "string",',
+    '  "visualSummary": "string"',
+    "}",
+    `파일명 힌트: ${file.name}`,
+    `규칙 기반 힌트 category: ${heuristic.category}`,
+    `규칙 기반 힌트 colorHints: ${heuristic.colorHints.join(", ")}`,
+    `규칙 기반 힌트 materialHints: ${heuristic.materialHints.join(", ")}`,
+    `규칙 기반 힌트 surfaceTone: ${heuristic.surfaceTone}`
+  ].join("\n");
+}
+
+async function fileToDataUrl(file: File): Promise<string> {
+  const arrayBuffer = await file.arrayBuffer();
+  const mimeType = file.type || "image/jpeg";
+  const base64 = Buffer.from(arrayBuffer).toString("base64");
+  return `data:${mimeType};base64,${base64}`;
+}
+
+function parseVisionAnalysis(rawText: string): VisionAnalysisResult | null {
+  const jsonText = extractJsonObject(rawText);
+
+  if (!jsonText) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(jsonText) as Record<string, unknown>;
+
+    return {
+      category: pickEnumValue(parsed.category, CATEGORY_VALUES),
+      colorHints: pickEnumArray(parsed.colorHints, COLOR_VALUES),
+      materialHints: pickEnumArray(parsed.materialHints, MATERIAL_VALUES),
+      surfaceTone: pickEnumValue(parsed.surfaceTone, SURFACE_TONE_VALUES),
+      materialNotes: normalizeVisionText(parsed.materialNotes),
+      visualSummary: normalizeVisionText(parsed.visualSummary)
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function analyzeWithVision(
+  file: File,
+  heuristic: HeuristicSnapshot
+): Promise<VisionAnalysisResult | null> {
+  const apiKey = process.env.OPENAI_API_KEY;
+
+  if (!apiKey) {
+    return null;
+  }
+
+  return withLangfuseObservation(
+    "openai.product_analyzer",
+    {
+      type: "generation",
+      input: {
+        fileName: file.name,
+        mimeType: file.type || "application/octet-stream",
+        fileSize: file.size,
+        heuristic
+      },
+      model: ANALYZER_MODEL,
+      metadata: {
+        pipeline: "product-analysis",
+        strategy: "heuristic-plus-vision-fallback",
+        timeoutMs: ANALYZER_TIMEOUT_MS
+      },
+      modelParameters: {
+        maxOutputTokens: 220,
+        responseFormat: "json"
+      },
+      captureOutput: (result) => result ?? { parsed: false },
+      captureErrorMetadata: () => ({
+        pipeline: "product-analysis",
+        strategy: "heuristic-plus-vision-fallback"
+      })
+    },
+    async () => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), ANALYZER_TIMEOUT_MS);
+
+      try {
+        const response = await fetch("https://api.openai.com/v1/responses", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model: ANALYZER_MODEL,
+            max_output_tokens: 220,
+            input: [
+              {
+                role: "user",
+                content: [
+                  {
+                    type: "input_text",
+                    text: buildVisionAnalyzerPrompt(file, heuristic)
+                  },
+                  {
+                    type: "input_image",
+                    image_url: await fileToDataUrl(file)
+                  }
+                ]
+              }
+            ]
+          }),
+          signal: controller.signal
+        });
+
+        if (!response.ok) {
+          return null;
+        }
+
+        const payload = await response.json();
+        const rawText = extractResponseText(payload);
+
+        if (!rawText) {
+          return null;
+        }
+
+        return parseVisionAnalysis(rawText);
+      } catch {
+        return null;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
+  );
+}
+
 export async function analyzeProductUpload(
   file: File,
   overrides?: Partial<ProductInputOverrides>
 ): Promise<ProductAnalysis> {
-  const inferredCategory = inferCategory(file.name);
-  const category = overrides?.category ?? inferredCategory.category;
+  const heuristic = buildHeuristicSnapshot(file);
+  const visionAnalysis = shouldUseVisionAnalyzer(file, heuristic, overrides)
+    ? await analyzeWithVision(file, heuristic)
+    : null;
+  const analysisSource = resolveAnalysisSource(heuristic, visionAnalysis);
+
+  const category = overrides?.category ?? visionAnalysis?.category ?? heuristic.category;
   const categoryLabel = categoryLabelFor(category);
   const colorHints = normalizeColorHints(
-    overrides?.colorHints?.length ? overrides.colorHints : inferColorHints(file.name)
+    overrides?.colorHints?.length
+      ? overrides.colorHints
+      : visionAnalysis?.colorHints?.length
+        ? visionAnalysis.colorHints
+        : heuristic.colorHints
   );
   const materialHints = normalizeMaterialHints(
-    overrides?.materialHints?.length ? overrides.materialHints : inferMaterialHints(file.name)
+    overrides?.materialHints?.length
+      ? overrides.materialHints
+      : visionAnalysis?.materialHints?.length
+        ? visionAnalysis.materialHints
+        : heuristic.materialHints
   );
-  const surfaceTone = overrides?.surfaceTone ?? inferSurfaceTone(colorHints);
-  const materialNotes = normalizeOptionalText(overrides?.materialNotes) ?? describeMaterial(materialHints);
+  const surfaceTone =
+    overrides?.surfaceTone ?? visionAnalysis?.surfaceTone ?? inferSurfaceTone(colorHints);
+  const materialNotes =
+    normalizeOptionalText(overrides?.materialNotes) ??
+    normalizeOptionalText(visionAnalysis?.materialNotes) ??
+    describeMaterial(materialHints);
   const visualSummary =
     normalizeOptionalText(overrides?.visualSummary) ??
+    normalizeOptionalText(visionAnalysis?.visualSummary) ??
     buildVisualSummary(categoryLabel, materialNotes, colorHints);
 
   return {
@@ -229,6 +624,7 @@ export async function analyzeProductUpload(
     fileName: file.name,
     mimeType: file.type || "application/octet-stream",
     fileSize: file.size,
+    analysisSource,
     sourceImageSource: null,
     sourceImageRelativePath: null,
     sourceImageUrl: null,

@@ -62,6 +62,12 @@ PROFILE_DEFAULTS = {
     },
 }
 
+CPU_FALLBACK_TARGET_SIZES = {
+    "1:1": (320, 320),
+    "4:5": (320, 400),
+    "9:16": (320, 568),
+}
+
 
 def _profile_key() -> str:
     return IMAGE_WORKER_PROFILE if IMAGE_WORKER_PROFILE in PROFILE_DEFAULTS else "full"
@@ -96,9 +102,39 @@ def _resolve_runtime_config() -> dict[str, Any]:
 
 
 RUNTIME_CONFIG = _resolve_runtime_config()
+EFFECTIVE_DEVICE = str(RUNTIME_CONFIG["device"])
+DEVICE_FALLBACK_REASON: Optional[str] = None
 
 if str(RUNTIME_CONFIG["device"]) == "mps":
     os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
+
+def _resolve_effective_device() -> str:
+    global DEVICE_FALLBACK_REASON
+    requested_device = str(RUNTIME_CONFIG["device"])
+
+    if requested_device != "mps":
+      return requested_device
+
+    try:
+        import torch
+    except Exception:
+        DEVICE_FALLBACK_REASON = "torch_import_failed"
+        return "cpu"
+
+    mps_backend = getattr(torch.backends, "mps", None)
+    is_built = bool(mps_backend and getattr(mps_backend, "is_built", lambda: False)())
+    is_available = bool(mps_backend and getattr(mps_backend, "is_available", lambda: False)())
+
+    if is_built and is_available:
+        return "mps"
+
+    DEVICE_FALLBACK_REASON = "mps_unavailable"
+    return "cpu"
+
+
+EFFECTIVE_DEVICE = _resolve_effective_device()
+IP_ADAPTER_ENABLED = EFFECTIVE_DEVICE != "cpu"
 
 
 _PIPELINE = None
@@ -170,7 +206,9 @@ def _resolve_relative_path(source: Literal["storage", "references"], relative_pa
 
 
 def _target_size(aspect_ratio: Literal["1:1", "4:5", "9:16"]) -> tuple[int, int]:
-    target_sizes = RUNTIME_CONFIG["target_sizes"]
+    target_sizes = (
+        CPU_FALLBACK_TARGET_SIZES if EFFECTIVE_DEVICE == "cpu" else RUNTIME_CONFIG["target_sizes"]
+    )
     return target_sizes[aspect_ratio]
 
 
@@ -193,6 +231,23 @@ def _torch_dtype(torch_module, device: str):
     return torch_module.float32
 
 
+def _effective_steps() -> int:
+    configured_steps = int(RUNTIME_CONFIG["steps"])
+    return min(configured_steps, 4) if EFFECTIVE_DEVICE == "cpu" else configured_steps
+
+
+def _effective_guidance_scale() -> float:
+    configured_scale = float(RUNTIME_CONFIG["guidance_scale"])
+    return min(configured_scale, 4.0) if EFFECTIVE_DEVICE == "cpu" else configured_scale
+
+
+def _engine_name() -> str:
+    if EFFECTIVE_DEVICE == "cpu":
+        return "sd15-controlnet-cpu-lite-worker"
+
+    return str(RUNTIME_CONFIG["engine"])
+
+
 def _load_pipeline():
     global _PIPELINE
     global _PIPELINE_LOAD_ERROR
@@ -212,7 +267,7 @@ def _load_pipeline():
                 StableDiffusionXLControlNetPipeline,
             )
 
-            device = str(RUNTIME_CONFIG["device"])
+            device = EFFECTIVE_DEVICE
             pipeline_kind = str(RUNTIME_CONFIG["pipeline_kind"])
             torch_dtype = _torch_dtype(torch, device)
 
@@ -239,13 +294,13 @@ def _load_pipeline():
                 **pipeline_kwargs,
             )
 
-            pipeline.load_ip_adapter(
-                str(RUNTIME_CONFIG["ip_adapter_repo"]),
-                subfolder=ip_adapter_subfolder,
-                weight_name=str(RUNTIME_CONFIG["ip_adapter_weight"]),
-            )
-            pipeline.set_ip_adapter_scale(float(RUNTIME_CONFIG["ip_scale"]))
-            pipeline.enable_attention_slicing()
+            if IP_ADAPTER_ENABLED:
+                pipeline.load_ip_adapter(
+                    str(RUNTIME_CONFIG["ip_adapter_repo"]),
+                    subfolder=ip_adapter_subfolder,
+                    weight_name=str(RUNTIME_CONFIG["ip_adapter_weight"]),
+                )
+                pipeline.set_ip_adapter_scale(float(RUNTIME_CONFIG["ip_scale"]))
 
             if hasattr(pipeline, "enable_vae_slicing"):
                 pipeline.enable_vae_slicing()
@@ -254,8 +309,6 @@ def _load_pipeline():
                 pipeline = pipeline.to("cuda")
             elif device == "mps":
                 pipeline = pipeline.to("mps")
-            elif hasattr(pipeline, "enable_model_cpu_offload"):
-                pipeline.enable_model_cpu_offload()
             else:
                 pipeline = pipeline.to("cpu")
 
@@ -295,9 +348,10 @@ def health():
         "ok": _PIPELINE_LOAD_ERROR is None,
         "loaded": _PIPELINE is not None,
         "profile": RUNTIME_CONFIG["profile"],
-        "device": RUNTIME_CONFIG["device"],
+        "requested_device": RUNTIME_CONFIG["device"],
+        "effective_device": EFFECTIVE_DEVICE,
         "pipeline_kind": RUNTIME_CONFIG["pipeline_kind"],
-        "engine": RUNTIME_CONFIG["engine"],
+        "engine": _engine_name(),
         "base_model": RUNTIME_CONFIG["base_model"],
         "controlnet_model": RUNTIME_CONFIG["controlnet_model"],
         "ip_adapter_repo": RUNTIME_CONFIG["ip_adapter_repo"],
@@ -306,6 +360,8 @@ def health():
         "guidance_scale": RUNTIME_CONFIG["guidance_scale"],
         "control_scale": RUNTIME_CONFIG["control_scale"],
         "ip_scale": RUNTIME_CONFIG["ip_scale"],
+        "ip_adapter_enabled": IP_ADAPTER_ENABLED,
+        "device_fallback_reason": DEVICE_FALLBACK_REASON,
         "last_error": _PIPELINE_LOAD_ERROR,
     }
 
@@ -347,6 +403,10 @@ def generate(payload: GenerateRequest, authorization: Optional[str] = Header(def
         PromptVariantPayload.model_validate(item) for item in payload.prompts.get("lifestyle", [])
     ]
 
+    if EFFECTIVE_DEVICE == "cpu":
+        representative_prompts = representative_prompts[:1]
+        lifestyle_prompts = lifestyle_prompts[:1]
+
     def run_variant(kind: Literal["representative", "lifestyle"], index: int, prompt_variant: PromptVariantPayload):
         width, height = _target_size(prompt_variant.aspect_ratio)
         control_image = _make_canny_condition(product_image, (width, height))
@@ -370,13 +430,13 @@ def generate(payload: GenerateRequest, authorization: Optional[str] = Header(def
                 prompt=prompt_variant.prompt,
                 negative_prompt=negative_prompt,
                 image=control_image,
-                ip_adapter_image=style_image,
                 controlnet_conditioning_scale=float(RUNTIME_CONFIG["control_scale"]),
-                guidance_scale=float(RUNTIME_CONFIG["guidance_scale"]),
-                num_inference_steps=int(RUNTIME_CONFIG["steps"]),
+                guidance_scale=_effective_guidance_scale(),
+                num_inference_steps=_effective_steps(),
                 width=width,
                 height=height,
                 generator=generator,
+                **({"ip_adapter_image": style_image} if IP_ADAPTER_ENABLED else {}),
             ).images[0]
         except RuntimeError as error:  # pragma: no cover - runtime path
             _clear_device_cache(torch)
@@ -403,7 +463,7 @@ def generate(payload: GenerateRequest, authorization: Optional[str] = Header(def
     ]
 
     return GenerateResponse(
-        engine=str(RUNTIME_CONFIG["engine"]),
+        engine=_engine_name(),
         representative_images=representative_images,
         lifestyle_images=lifestyle_images,
     )

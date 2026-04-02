@@ -1,6 +1,8 @@
 import "server-only";
 
+import { getThemeReferenceAssets, inferReferenceMimeType, readReferenceAsset } from "@/lib/reference-library";
 import { STYLE_PRESETS } from "@/lib/style-presets";
+import { inferStorageMimeType, readStorageAsset } from "@/lib/storage-assets";
 import { requestImageWorkerGeneration } from "@/lib/image-worker";
 import {
   GeneratedImage,
@@ -108,6 +110,162 @@ function buildArtboard({
   `;
 
   return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+}
+
+function bufferToDataUrl(buffer: Buffer, mimeType: string) {
+  return `data:${mimeType};base64,${buffer.toString("base64")}`;
+}
+
+async function loadProductSourceDataUrl(product: ProductAnalysis) {
+  if (!product.sourceImageSource || !product.sourceImageRelativePath) {
+    return null;
+  }
+
+  if (product.sourceImageSource === "storage") {
+    const asset = await readStorageAsset(product.sourceImageRelativePath);
+    return bufferToDataUrl(asset.buffer, inferStorageMimeType(asset.fileName));
+  }
+
+  const asset = await readReferenceAsset(product.sourceImageRelativePath);
+  return bufferToDataUrl(asset.buffer, inferReferenceMimeType(asset.fileName));
+}
+
+async function loadThemeReferenceDataUrl(styleId: StyleId) {
+  const themeAssets = await getThemeReferenceAssets(styleId, 1);
+  const asset = themeAssets[0];
+
+  if (!asset) {
+    return null;
+  }
+
+  const loaded = await readReferenceAsset(asset.relativePath);
+  return bufferToDataUrl(loaded.buffer, inferReferenceMimeType(loaded.fileName));
+}
+
+function buildCompositeSvg({
+  productDataUrl,
+  themeDataUrl,
+  aspectRatio,
+  kind,
+  palette,
+  seed
+}: {
+  productDataUrl: string;
+  themeDataUrl: string | null;
+  aspectRatio: GeneratedImage["aspectRatio"];
+  kind: GeneratedImage["kind"];
+  palette: [string, string, string];
+  seed: number;
+}) {
+  const { width, height } = canvasSize(aspectRatio);
+  const [base, middle, accent] = palette;
+  const productWidth = kind === "representative" ? width * 0.48 : width * 0.42;
+  const productHeight = height * 0.52;
+  const productX = (width - productWidth) / 2;
+  const productY = kind === "representative" ? height * 0.22 : height * 0.28;
+  const haloX = 130 + (seed % 180);
+  const haloY = 180 + (seed % 120);
+  const panelY = kind === "representative" ? height * 0.1 : height * 0.14;
+  const panelHeight = kind === "representative" ? height * 0.78 : height * 0.72;
+  const backgroundLayer = themeDataUrl
+    ? `<image href="${themeDataUrl}" x="0" y="0" width="${width}" height="${height}" preserveAspectRatio="xMidYMid slice" filter="url(#bgBlur)"/>`
+    : "";
+
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" fill="none">
+      <defs>
+        <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+          <stop offset="0%" stop-color="${base}" />
+          <stop offset="60%" stop-color="${middle}" />
+          <stop offset="100%" stop-color="${accent}" />
+        </linearGradient>
+        <filter id="bgBlur" x="-10%" y="-10%" width="120%" height="120%">
+          <feGaussianBlur stdDeviation="${kind === "representative" ? 16 : 10}" />
+        </filter>
+        <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+          <feDropShadow dx="0" dy="26" stdDeviation="26" flood-color="rgba(78,52,33,0.22)" />
+        </filter>
+      </defs>
+      <rect width="${width}" height="${height}" fill="url(#bg)" />
+      ${backgroundLayer}
+      <rect width="${width}" height="${height}" fill="rgba(255,248,240,${kind === "representative" ? 0.62 : 0.38})" />
+      <circle cx="${haloX}" cy="${haloY}" r="${kind === "representative" ? 170 : 140}" fill="rgba(255,255,255,0.22)" />
+      <circle cx="${width - 160}" cy="${height - 180}" r="${kind === "representative" ? 150 : 190}" fill="rgba(255,255,255,0.14)" />
+      <rect x="${width * 0.09}" y="${panelY}" width="${width * 0.82}" height="${panelHeight}" rx="${width * 0.04}" fill="rgba(255,255,255,${kind === "representative" ? 0.3 : 0.2})" />
+      <image href="${productDataUrl}" x="${productX}" y="${productY}" width="${productWidth}" height="${productHeight}" preserveAspectRatio="xMidYMid meet" filter="url(#shadow)" />
+    </svg>
+  `;
+
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+}
+
+async function createReferenceCompositeImages({
+  styleId,
+  product,
+  regenerateCount
+}: {
+  styleId: StyleId;
+  product: ProductAnalysis;
+  regenerateCount: number;
+}) {
+  const seedBase = hashString(`${product.uploadToken}:${styleId}:${regenerateCount}`);
+  const ratios = seededAspectRatios(seedBase);
+  const [productDataUrl, themeDataUrl] = await Promise.all([
+    loadProductSourceDataUrl(product),
+    loadThemeReferenceDataUrl(styleId)
+  ]);
+
+  if (!productDataUrl) {
+    return null;
+  }
+
+  const palette = STYLE_PRESETS[styleId].palette;
+
+  const representativeImages = ratios.slice(0, 2).map((aspectRatio, index) => {
+    const seed = seedBase + index;
+
+    return {
+      id: `rep_${seed}`,
+      kind: "representative" as const,
+      aspectRatio,
+      seed,
+      url: buildCompositeSvg({
+        productDataUrl,
+        themeDataUrl,
+        aspectRatio,
+        kind: "representative",
+        palette,
+        seed
+      })
+    };
+  });
+
+  const lifestyleImages = ratios.slice(1, 3).map((aspectRatio, index) => {
+    const seed = seedBase + index + 10;
+
+    return {
+      id: `life_${seed}`,
+      kind: "lifestyle" as const,
+      aspectRatio,
+      seed,
+      url: buildCompositeSvg({
+        productDataUrl,
+        themeDataUrl,
+        aspectRatio,
+        kind: "lifestyle",
+        palette,
+        seed
+      })
+    };
+  });
+
+  return {
+    representativeImages,
+    lifestyleImages,
+    seedBase,
+    imageEngine: "reference-composite-fallback",
+    imageFallbackUsed: true
+  };
 }
 
 function buildPlaceholderUrl({
@@ -257,6 +415,16 @@ export async function createGeneratedImages({
       imageEngine: workerResult.imageEngine,
       imageFallbackUsed: false
     };
+  }
+
+  const compositeResult = await createReferenceCompositeImages({
+    styleId,
+    product,
+    regenerateCount
+  });
+
+  if (compositeResult) {
+    return compositeResult;
   }
 
   return createPlaceholderImages({

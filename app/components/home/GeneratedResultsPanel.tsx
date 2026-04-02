@@ -93,6 +93,14 @@ export function GeneratedResultsPanel({
   onRegenerate,
   onChangeStyle
 }: GeneratedResultsPanelProps) {
+  const imageModeLabel = generatedPackage
+    ? generatedPackage.generationMeta.imageEngine === "reference-composite-fallback"
+      ? "composite fallback"
+      : generatedPackage.generationMeta.imageFallbackUsed
+        ? "placeholder"
+        : "worker"
+    : null;
+
   if (!generatedPackage) {
     return (
       <section className="panel" id={sectionId}>
@@ -116,7 +124,7 @@ export function GeneratedResultsPanel({
         <div className="result-card-grid">
           <PendingCard
             title="대표 감성 이미지"
-            description="대표 컷 1~2개를 준비합니다. worker가 연결되면 실제 생성 이미지를, 아니면 placeholder 이미지를 반환합니다."
+            description="대표 컷 1~2개를 준비합니다. worker가 연결되면 실제 생성 이미지를, 실패하면 레퍼런스 합성 fallback 또는 placeholder를 반환합니다."
           />
           <PendingCard
             title="라이프스타일 이미지"
@@ -163,9 +171,7 @@ export function GeneratedResultsPanel({
         <span className="meta-badge">
           fallback {generatedPackage.generationMeta.fallbackUsed ? "사용" : "미사용"}
         </span>
-        <span className="meta-badge">
-          이미지 {generatedPackage.generationMeta.imageFallbackUsed ? "placeholder" : "worker"}
-        </span>
+        <span className="meta-badge">이미지 {imageModeLabel}</span>
       </div>
 
       <div className="result-card-grid">
