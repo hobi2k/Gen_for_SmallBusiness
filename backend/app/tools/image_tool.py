@@ -541,6 +541,34 @@ def generate_detail_images(
     ]
 
 
+def generate_video_key_visual(
+    project_id: str,
+    payload: ProjectCreateRequest,
+    copy_bundle: dict[str, str | list[str]],
+) -> str:
+    """
+    영상용 대표 이미지 한 장을 생성한다.
+
+    Args:
+        project_id: 프로젝트 식별자
+        payload: 프로젝트 생성 요청 데이터
+        copy_bundle: 문구 생성 결과
+
+    Returns:
+        생성된 대표 이미지 경로
+    """
+
+    root = ensure_project_root(project_id)
+    return _generate_image(
+        root / "video_source.png",
+        payload,
+        copy_bundle,
+        variant_label="영상 대표 이미지",
+        width=payload.video_width,
+        height=payload.video_height,
+    )
+
+
 def generate_logo_drafts(project_id: str, payload: ProjectCreateRequest) -> list[str]:
     """
     로고 초안 결과물 경로를 생성한다.

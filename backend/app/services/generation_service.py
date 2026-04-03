@@ -14,6 +14,7 @@ from backend.app.tools.image_tool import (
     generate_banner_images,
     generate_detail_images,
     generate_logo_drafts,
+    generate_video_key_visual,
     release_image_pipelines,
 )
 from backend.app.tools.music_tool import generate_music
@@ -206,6 +207,10 @@ def generate_video_asset_bundle(payload: ProjectCreateRequest) -> dict[str, str 
             banner_paths=[],
             image_paths=payload.image_paths,
         )
+        if key_visual is None:
+            logger.info("업로드 이미지가 없어 영상용 대표 이미지를 먼저 생성합니다.")
+            key_visual = generate_video_key_visual(project_id, payload, copy_bundle)
+            logger.info("영상용 대표 이미지 생성 완료: %s", key_visual)
         logger.info("대표 이미지 선택 완료: %s", key_visual or "없음")
         logger.info("원본 영상 생성 시작")
         raw_video_path = generate_short_video(project_id, payload, key_visual, copy_bundle)
