@@ -800,6 +800,8 @@ def _view_selection_score(image, product: ProductPayload, *, is_primary: bool) -
         orientation_score = max(0.0, 1.0 - cardinal_distance / 28.0)
         score += orientation_score * 1.28
         score += min(0.7, max(0.0, aspect_ratio - 1.0)) * 0.75
+        if cardinal_distance > 18:
+            score -= min(0.42, (cardinal_distance - 18) * 0.02)
         if expected_plan_aspect is not None:
             ratio_gap = abs(aspect_ratio - expected_plan_aspect)
             score += max(0.0, 1.0 - ratio_gap / max(expected_plan_aspect, 1.0)) * 1.12
@@ -1187,6 +1189,34 @@ def _surface_side_margin_ratio(profile: Literal["flat", "upright", "linear", "ge
     return 0.16
 
 
+def _min_surface_y_ratio(
+    *,
+    profile: Literal["flat", "upright", "linear", "generic"],
+    kind: Literal["representative", "lifestyle"],
+) -> float:
+    if profile == "flat":
+        return 0.7 if kind == "representative" else 0.74
+    if profile == "upright":
+        return 0.62 if kind == "representative" else 0.66
+    if profile == "linear":
+        return 0.64 if kind == "representative" else 0.68
+    return 0.6 if kind == "representative" else 0.64
+
+
+def _max_surface_center_offset_ratio(
+    *,
+    profile: Literal["flat", "upright", "linear", "generic"],
+    kind: Literal["representative", "lifestyle"],
+) -> float:
+    if profile == "flat":
+        return 0.22 if kind == "representative" else 0.18
+    if profile == "upright":
+        return 0.3 if kind == "representative" else 0.26
+    if profile == "linear":
+        return 0.28 if kind == "representative" else 0.24
+    return 0.32 if kind == "representative" else 0.28
+
+
 def _score_empty_surface(
     *,
     edge_map,
@@ -1288,6 +1318,13 @@ def _select_placement_region(
     max_candidate_score = max(candidate["score"] for candidate in candidates)
 
     for candidate in candidates:
+        candidate_y_ratio = candidate["y"] / max(scene_height, 1)
+        candidate_center_offset = abs(candidate["x"] / max(scene_width, 1) - 0.5)
+        if candidate_y_ratio < _min_surface_y_ratio(profile=profile, kind=kind):
+            continue
+        if candidate_center_offset > _max_surface_center_offset_ratio(profile=profile, kind=kind):
+            continue
+
         candidate_width = int(candidate["right"] - candidate["left"])
         side_margin = int(candidate_width * _surface_side_margin_ratio(profile))
         usable_left = max(0, int(candidate["left"]) + side_margin)
@@ -1472,7 +1509,7 @@ def _apply_scene_geometry(
 
     if profile == "flat":
         source_angle = _estimate_cutout_orientation_degrees(adjusted)
-        normalization_rotation = max(-32.0, min(32.0, -source_angle))
+        normalization_rotation = max(-68.0, min(68.0, -source_angle))
         if abs(normalization_rotation) >= 0.35:
             adjusted = adjusted.rotate(
                 normalization_rotation,
@@ -1524,11 +1561,11 @@ def _apply_scene_geometry(
         )
         adjusted = _alpha_crop(adjusted)
 
-    rotation_limit = 6.0 if profile == "flat" else 2.4 if profile == "upright" else 4.0
-    rotation_factor = 0.86 if profile == "flat" else 0.14 if profile == "upright" else 0.22
+    rotation_limit = 1.8 if profile == "flat" else 2.4 if profile == "upright" else 4.0
+    rotation_factor = 0.22 if profile == "flat" else 0.14 if profile == "upright" else 0.22
     rotation = max(-rotation_limit, min(rotation_limit, angle * (rotation_factor if kind == "lifestyle" else 0.1)))
     if profile == "flat" and kind == "representative":
-        rotation = max(-rotation_limit, min(rotation_limit, angle * 0.74))
+        rotation = max(-rotation_limit, min(rotation_limit, angle * 0.16))
     if abs(rotation) >= 0.2:
         adjusted = adjusted.rotate(
             rotation,
