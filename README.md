@@ -23,231 +23,184 @@
 - 트레이
 - 커트러리
 
-## 처음부터 끝까지 워크플로우
+## 현재 구현 상태
 
-이 프로젝트의 전체 흐름은 아래 한 줄로 요약됩니다.
+이 저장소는 아래 기능이 실제로 동작하는 상태를 기준으로 관리됩니다.
 
-`상품 이미지 확보 -> 상품 분석 -> 스타일 3개 추천 -> 스타일 선택 -> 카피/이미지 생성 -> 결과 확인 -> 재생성/스타일 변경 -> 로그 축적`
+- `Next.js 15 + React 19 + TypeScript` 단일 페이지 앱
+- 스타일 6종 고정 프리셋
+- 상품 분석 및 추천 스타일 3개 반환
+- 스타일 선택 이벤트 저장
+- 스마트스토어용 텍스트 패키지 생성
+- Python 이미지 워커를 통한 배경 생성
+- 상품 누끼 추출 및 테이블 위 배치
+- 실측 사이즈 기반 스케일 보정
+- `대표 1장 + 보조 최대 2장` 멀티뷰 입력 지원
+- dev seed를 통한 내부 QA/데모 경로 유지
+- JSONL + Langfuse 기반 로그/트레이싱
 
-### 0. 레퍼런스 준비
+## 현재 워크플로우
 
-- 상품 샘플은 `references/` 아래에 카테고리별로 둡니다.
-- 테마 레퍼런스는 `references/themes/*` 아래에 둡니다.
-- 이 레퍼런스는 추천 카드 썸네일, 개발용 시드, 이미지 생성 스타일 conditioning의 공통 기준으로 사용됩니다.
+전체 흐름:
 
-### 1. 입력 단계
+`입력 확보 -> 상품 분석 -> 스타일 추천 -> 스타일 선택 -> 프롬프트 생성 -> 텍스트/이미지 생성 -> 결과 확인 -> 재생성/스타일 변경 -> 로그 축적`
 
-입력 경로는 두 가지입니다.
+### 입력 경로
 
-- 실제 상품 이미지를 업로드한다.
-- 내부 QA/데모용 시드를 선택한다.
+입력은 두 가지입니다.
 
-실제 업로드 흐름:
+- 실제 업로드
+- 내부 QA/데모용 dev seed
 
-- 브라우저가 `POST /api/recommend-styles`로 이미지를 전송한다.
-- 업로드 직후 사용자는 카테고리, 색감, 소재, 전체 톤, 메모를 선택 입력으로 보정할 수 있다.
-- 선택 입력을 비워두면 해당 상세 정보는 `None` 기준으로 유지된다.
-- 서버는 업로드 원본을 `storage/uploads/*`에 저장한다.
-- 이후 추천, 생성, 로깅은 이 저장된 원본 경로를 공통으로 참조한다.
+실제 업로드는 아래를 지원합니다.
 
-시드 흐름:
+- 대표 이미지 1장 필수
+- 보조 이미지 최대 2장 선택
+- 실측 사이즈 입력
+  - 가로(cm)
+  - 세로/깊이(cm)
+  - 높이(cm)
+- 카테고리/색감/소재/톤/메모 override
 
-- 브라우저가 `GET /api/dev-seeds`로 샘플 입력을 불러온다.
-- 시드는 `references/` 안의 실제 상품 이미지를 바로 사용한다.
-- 이 경로는 최종 사용자용 핵심 기능이 아니라 개발 검증, QA, 데모를 빠르게 반복하기 위한 내부 보조 기능이다.
+중요:
 
-### 2. 상품 분석 단계
+- 보조 이미지를 넣지 않으면 기존 단일 이미지 흐름 그대로 동작합니다.
+- dev seed는 계속 단일 이미지 기반으로 동작합니다.
 
-입력 이미지가 들어오면 서버는 `Product Analyzer`를 거쳐 아래 정보를 만든다.
+### 상품 분석
+
+추천과 생성의 공통 입력으로 아래 분석 결과를 만듭니다.
 
 - `uploadToken`
 - `category`, `categoryLabel`
+- `visualSummary`
+- `materialNotes`
 - `colorHints`
 - `materialHints`
 - `surfaceTone`
-- `visualSummary`
+- `dimensionsCm`
 - `sourceImageSource`
 - `sourceImageRelativePath`
 - `sourceImageUrl`
+- `supplementalImages`
 
-이 분석 결과는 이후 모든 단계의 기준 데이터다.
+### 스타일 추천
 
-### 3. 스타일 추천 단계
+`POST /api/recommend-styles`
 
-추천은 `POST /api/recommend-styles` 안에서 처리된다.
+- 상품 분석 결과를 텍스트로 정리
+- 스타일 프리셋 6개와 매칭
+- embedding / heuristic reranking
+- 상위 3개 추천 반환
 
-동작 순서:
-
-1. 상품 분석 결과를 텍스트로 정리한다.
-2. 스타일 6개 설명과 embedding 유사도를 계산한다.
-3. heuristic reranking을 적용한다.
-4. 점수 상위 3개를 추천 카드로 반환한다.
-
-reranking 반영 요소:
-
-- 상품 카테고리
-- 색감
-- 소재
-- 전체 톤
-
-반환 값:
+추천 결과에는 아래가 포함됩니다.
 
 - top 3 스타일
-- 전체 6개 스타일 점수
-- 각 스타일 추천 이유
-- 각 스타일 하이라이트
-- 실제 테마 썸네일 프리뷰
+- 전체 스타일 점수
+- 추천 이유와 하이라이트
+- 썸네일/레퍼런스 프리뷰
 
-### 4. 스타일 선택 단계
+### 스타일 선택
 
-사용자가 추천 카드 중 하나를 고르면 `POST /api/style-selection`이 호출된다.
+`POST /api/style-selection`
 
-여기서 저장하는 정보:
-
-- 업로드 식별자
-- 추천된 3개 스타일
-- 최종 선택 스타일
+- 선택된 스타일
+- 추천 목록
 - fallback 여부
+- 업로드 식별자
 
-이 단계는 이후 어떤 스타일이 실제로 선택되었는지 학습 데이터로 남기기 위한 이벤트다.
+를 로그/트레이싱 용도로 저장합니다.
 
-### 5. 생성 준비 단계
+### 생성 단계
 
-사용자가 생성 버튼을 누르면 `POST /api/generate`가 호출된다.
+`POST /api/generate`
 
-서버는 먼저 `Prompt Builder`를 사용해 아래를 만든다.
+생성은 텍스트와 이미지를 함께 만듭니다.
 
-- 대표 감성 이미지 프롬프트 1~2개
-- 라이프스타일 이미지 프롬프트 1~2개
-- negative prompt
-- 스마트스토어용 카피 프롬프트
-- 엄격한 JSON schema
+텍스트:
 
-여기서 스타일별 키워드, 조명, 장면 구성, 컬러톤이 모두 반영된다.
+- 기본: `GPT-5-mini`
+- fallback: `GPT-5-nano`
+- 그래도 실패 시 템플릿 fallback
 
-### 6. 콘텐츠 생성 단계
+이미지:
 
-`/api/generate`는 텍스트와 이미지를 함께 준비한다.
+- 현재 기본 결과는 총 3장
+  - 대표 감성 이미지 1장 (`1:1`)
+  - 라이프스타일 이미지 2장 (`4:5`, `9:16`)
+- worker가 켜져 있으면 Python image worker 호출
+- worker가 실패하면 placeholder/fallback 경로로 내려갑니다
 
-텍스트 생성:
+## 이미지 생성 파이프라인
 
-- 우선 `GPT-5-mini`
-- 실패 또는 지연 시 `GPT-5-nano`
-- 그래도 어려우면 템플릿 fallback
+현재 worker는 완전한 “상품 재생성”이 아니라, 아래 하이브리드 구조입니다.
 
-이미지 생성:
+1. 스타일 프로파일 기반 주방/다이닝 배경 생성
+2. 상품 이미지 누끼 추출
+   - 기본: `rembg`
+   - 실패 시 휴리스틱 누끼 fallback
+3. 테이블/식탁 후보 영역 탐색
+4. 상품군별 배치 보정
+   - `flat`: 트레이/접시/볼
+   - `upright`: 컵/유리잔
+   - `linear`: 커트러리
+5. 실측 사이즈 기반 스케일 보정
+6. 조도/색온도/그림자 보정 후 합성
 
-- worker가 비활성화되어 있으면 placeholder fallback
-- worker가 활성화되어 있으면 Python image worker 호출
-- 선택 스타일의 테마 레퍼런스 이미지를 함께 전달
-- 상품 원본 이미지 경로도 함께 전달
+현재 목적:
 
-worker 내부 프로파일:
+- 배경은 `주방/다이닝 공간`으로 고정
+- 테이블 또는 식탁이 반드시 보이는 장면 생성
+- 상품은 공중에 뜨지 않고 테이블 위에 놓인 것처럼 배치
+- 같은 상품이 배경에 한 번 더 생성되는 문제 최소화
+
+### 스타일 레퍼런스 사용 방식
+
+`references/themes/*` 이미지는 런타임에 “공간 구조”가 아니라 “스타일”을 더 참고하도록 조정되어 있습니다.
+
+- 색감
+- 재질감
+- 장식 밀도
+- 조명 분위기
+
+반면 공간 유형은 프롬프트와 스타일 프로파일에서 강제합니다.
+
+즉 목표는:
+
+- 레퍼런스는 `스타일`
+- 생성 배경은 `주방/다이닝 공간`
+
+입니다.
+
+### 멀티뷰 입력 처리
+
+멀티뷰가 있는 경우 worker는 대표 이미지와 보조 이미지들 중에서 실제 배치에 쓸 뷰를 선택합니다.
+
+- `flat`: 탑뷰/평행도/상면 비율이 좋은 이미지 선호
+- `upright`: 정면 비율이 자연스러운 이미지 선호
+- `linear`: 긴 축이 잘 드러나는 이미지 선호
+
+보조 이미지가 없으면 대표 이미지 1장만 그대로 사용합니다.
+
+## 현재 이미지 워커 상태
+
+현재 프로파일:
 
 - `full`
-  원격 GPU용 `SDXL + ControlNet + IP-Adapter`
+  - 원격 GPU용
+  - `SDXL + IP-Adapter`
 - `lite-mps`
-  로컬 Apple Silicon용 `Stable Diffusion 1.5 + ControlNet + IP-Adapter`
+  - 로컬 Apple Silicon 확인용
+  - `Stable Diffusion 1.5 + IP-Adapter`
 
-라이프스타일 이미지는 아래 방향을 목표로 한다.
+참고:
 
-- 업로드한 상품 형태를 유지
-- `references/themes/*` 분위기를 반영
-- 선택한 스타일 공간 안에 자연스럽게 녹아들게 생성
-
-### 7. 결과 패키지 반환 단계
-
-최종 응답은 아래 패키지로 통일된다.
-
-- 대표 감성 이미지 1~2개
-- 라이프스타일 이미지 1~2개
-- 상품 한 줄 소개
-- 상세 설명
-- 스마트스토어용 짧은 소개문구
-- 키워드
-- 해시태그
-- `generationMeta`
-
-프론트는 이 결과를 카드 형태로 나눠 보여주고, 텍스트마다 복사 버튼을 붙인다.
-
-### 8. 재생성 / 스타일 변경 단계
-
-사용자는 결과 화면에서 두 가지 액션을 할 수 있다.
-
-- 같은 스타일로 다시 생성
-- 다른 스타일로 바꿔 다시 생성
-
-같은 스타일 재생성 시:
-
-- `regenerateCount`가 증가한다.
-- 같은 입력이어도 seed가 달라져 변형 결과를 만든다.
-
-스타일 변경 시:
-
-- 이미 계산된 추천 카드 목록에서 다시 선택한다.
-- 같은 상품 분석 결과를 유지한 채 새로운 스타일 기준으로 재생성한다.
-
-### 9. 로깅 / 관측 단계
-
-각 단계의 이벤트는 JSONL과 Langfuse에 남는다.
-
-주요 로그 이벤트:
-
-- `styles_recommended`
-- `style_selected`
-- `package_generated`
-
-핵심 로그 필드:
-
-- `uploadIdentifier`
-- `recommendedStyles`
-- `finalSelectedStyle`
-- `generationResult`
-- `isRegenerated`
-- `fallbackUsed`
-- `generatedAt`
-- `traceId`
-- `spanId`
-
-즉, 이 프로젝트는 단순 생성기라기보다 `입력 -> 추천 -> 선택 -> 생성 -> 재선택` 전체 루프를 데이터로 남기는 MVP다.
-
-## 현재 구현 범위
-
-이 저장소에는 실제로 실행 가능한 MVP 앱 골격이 포함되어 있습니다.
-
-- `Next.js 15 + React 19 + TypeScript` 기반 단일 페이지 UI
-- 필수 UX 플로우 구현
-- 정확히 6개의 고정 스타일 프리셋 구현
-- 업로드 이미지 기반 상품 분석
-- 스타일 3개 추천 API
-- 스타일 선택 이벤트 저장 API
-- 전체 콘텐츠 패키지 생성 API
-- JSONL 기반 로그 저장
-- Docker 기반 실행 기본 세팅
-- Langfuse tracing 기본 세팅
-- `OPENAI_API_KEY`가 있을 때:
-  - `text-embedding-3-small`로 스타일 매칭
-  - `gpt-5-mini` 1차 시도
-  - `gpt-5-nano` fallback 시도
-- `OPENAI_API_KEY`가 없을 때:
-  - 결정적 휴리스틱 추천
-  - 템플릿 기반 카피 생성 fallback
-
-## 중요한 현재 상태
-
-문구 생성과 추천은 바로 동작합니다.  
-이미지 생성은 이제 프로파일 기반 워커에 연결되는 구조입니다.
-
-- `full`: `SDXL + ControlNet + IP-Adapter`, 원격 NVIDIA GPU 기준
-- `lite-mps`: `Stable Diffusion 1.5 + ControlNet + IP-Adapter`, Apple Silicon 로컬 확인용 경량 경로
-
-워커가 켜져 있지 않거나 모델이 준비되지 않은 경우에는 자동으로 deterministic placeholder 이미지로 fallback 됩니다.
-
-즉, 이 저장소는 "실행 가능한 MVP 오케스트레이션 레이어 + 실제 이미지 워커 연결 지점"까지 포함합니다.
+- 코드에는 ControlNet 설정이 남아 있지만, 현재 실제 배경 생성은 blank condition 기반이라 구조 제어를 강하게 쓰지 않습니다.
+- 2-stage refinement(inpaint)는 구현돼 있지만, 최근 latency/fallback 이슈 때문에 기본값은 `off`입니다.
 
 ## 고정 스타일 프리셋
 
-아래 6개 스타일이 정확히 구현되어 있습니다.
+아래 6개 스타일을 고정 지원합니다.
 
 1. 모던 미니멀
 2. 내추럴 우드
@@ -256,40 +209,47 @@ worker 내부 프로파일:
 5. 코지 홈카페
 6. 일본식 담백한 식탁
 
-각 스타일에는 아래 정보가 포함됩니다.
+각 스타일은 아래 정보를 가집니다.
 
 - 프롬프트 템플릿
 - 조명 설명
 - 장면 구성
 - 컬러톤
+- scene profile
+  - `spaceType`
+  - `tableSurface`
+  - `requiredElements`
+  - `backgroundElements`
+  - `accentProps`
+  - `composition`
+  - `prohibitedElements`
 
 구현 파일:
 
 - `lib/style-presets.ts`
 
-## 출력 패키지
+## 결과 패키지
 
-생성 결과는 아래 패키지 기준으로 맞춰져 있습니다.
+현재 생성 결과 패키지는 아래 구조입니다.
 
-- 대표 감성 이미지 1~2개
-- 라이프스타일 이미지 1~2개
+- 대표 감성 이미지 1장
+- 라이프스타일 이미지 2장
 - 상품 한 줄 소개
 - 상세 설명
 - 스마트스토어용 짧은 소개문구
 - 키워드
 - 해시태그
-
-스타일링 팁은 출력에 포함하지 않습니다.
+- `generationMeta`
 
 ## 핵심 UX 플로우
 
-현재 UI는 아래 순서를 그대로 따른다.
+현재 UI는 아래 순서를 따릅니다.
 
-1. 이미지 업로드 또는 테스트 시드 선택
-2. 스타일 3개 추천 카드 확인
+1. 상품 이미지 업로드 또는 dev seed 선택
+2. 추천 스타일 3개 확인
 3. 스타일 1개 선택
 4. 생성 버튼 클릭
-5. 결과 패키지 카드 확인
+5. 결과 확인
 6. 복사 / 재생성 / 스타일 변경
 
 구현 파일:
@@ -300,60 +260,47 @@ worker 내부 프로파일:
 
 ```text
 [브라우저]
-  -> 상품 이미지 업로드
+  -> 대표 이미지 1장 + 보조 이미지 최대 2장 업로드
+  -> 실측 사이즈 / 메타데이터 입력
   -> 스타일 추천 확인
   -> 스타일 선택
   -> 콘텐츠 생성 요청
 
 [Next.js App Router]
   -> /api/recommend-styles
+     -> 업로드 파일 storage/uploads 저장
      -> Product Analyzer
-     -> 업로드 원본 storage/uploads 저장
-     -> Embedding / Heuristic Recommender
-     -> Langfuse Trace
-     -> Logger
+     -> Style Recommender
+     -> Logger / Langfuse
 
   -> /api/style-selection
-     -> Langfuse Trace
-     -> Selection Logger
+     -> 선택 이벤트 저장
 
   -> /api/generate
      -> Prompt Builder
-     -> LLM Orchestrator
-     -> Image Orchestrator Adapter
-        -> IMAGE_WORKER_ENABLED=true 이면 worker 호출
-        -> worker 미응답 시 placeholder fallback
-     -> Langfuse Trace
-     -> Logger
+     -> Text Generator
+     -> Image Worker Adapter
+        -> worker 활성 시 Python worker 호출
+        -> 실패 시 fallback
+     -> Logger / Langfuse
+
+  -> /api/storage-asset
+     -> 생성 산출물 프록시
+
+[Python Image Worker]
+  -> FastAPI
+  -> SDXL or SD1.5 background generation
+  -> style-only reference preprocessing
+  -> product cutout
+  -> tabletop candidate selection
+  -> size-aware placement
+  -> lighting/shadow harmonization
 
 [Storage]
   -> storage/uploads/*
   -> storage/generated/*
   -> storage/logs/generation-events.jsonl
-
-[Python Image Worker]
-  -> FastAPI
-  -> profile=full
-     -> SDXL base
-     -> SDXL ControlNet (canny)
-     -> IP-Adapter
-  -> profile=lite-mps
-     -> Stable Diffusion 1.5
-     -> ControlNet (canny)
-     -> IP-Adapter
-  -> references/themes/* 스타일 레퍼런스 사용
-
-[Observability]
-  -> Langfuse Cloud or Self-hosted Endpoint
-
-[Container Runtime]
-  -> Dockerfile
-  -> docker-compose.yml
 ```
-
-상세 설계 문서:
-
-- `docs/mvp-blueprint.md`
 
 ## 폴더 구조
 
@@ -364,62 +311,65 @@ worker 내부 프로파일:
 │  │  ├─ dev-seeds/route.ts
 │  │  ├─ generate/route.ts
 │  │  ├─ recommend-styles/route.ts
+│  │  ├─ reference-asset/route.ts
+│  │  ├─ storage-asset/route.ts
 │  │  └─ style-selection/route.ts
+│  ├─ components/home/*
+│  ├─ hooks/useHomePageFlow.ts
 │  ├─ globals.css
 │  ├─ layout.tsx
 │  └─ page.tsx
-├─ .dockerignore
-├─ .env.example
-├─ Dockerfile
 ├─ docs
 │  └─ mvp-blueprint.md
-├─ workers
-│  └─ image_worker
-│     ├─ app.py
-│     └─ Dockerfile
-├─ instrumentation.node.ts
-├─ instrumentation.ts
 ├─ lib
 │  ├─ content-generator.ts
 │  ├─ dev-seeds.ts
 │  ├─ image-output.ts
-│  ├─ langfuse.ts
+│  ├─ image-worker.ts
 │  ├─ logging.ts
 │  ├─ product-analyzer.ts
 │  ├─ prompt-builder.ts
+│  ├─ storage-assets.ts
 │  ├─ style-presets.ts
 │  ├─ style-recommender.ts
 │  ├─ types.ts
 │  └─ utils.ts
-├─ docker-compose.yml
+├─ references
+│  └─ themes/*
+├─ workers
+│  └─ image_worker
+│     ├─ app.py
+│     └─ Dockerfile
 ├─ storage
 │  ├─ generated
 │  ├─ logs
 │  └─ uploads
+├─ .env.example
+├─ Dockerfile
+├─ docker-compose.yml
 ├─ package.json
-├─ next.config.ts
-└─ tsconfig.json
+└─ requirements.txt
 ```
 
-## API
+## API 요약
 
 ### `POST /api/recommend-styles`
-
-상품 이미지 업로드 후 추천 스타일 3개를 반환합니다.
 
 입력:
 
 - `multipart/form-data`
 - `file`
+- `supplementalFiles` (optional, max 2)
+- `metadata`
 
-응답 핵심 필드:
+반환:
 
 - `analysis`
 - `recommendations`
+- `allStyles`
+- `fallbackUsed`
 
 ### `POST /api/style-selection`
-
-사용자가 어떤 스타일을 선택했는지 로그로 저장합니다.
 
 입력 핵심 필드:
 
@@ -429,16 +379,15 @@ worker 내부 프로파일:
 
 ### `POST /api/generate`
 
-선택 스타일 기준으로 전체 콘텐츠 패키지를 생성합니다.
-
 입력 핵심 필드:
 
 - `uploadToken`
 - `styleId`
 - `regenerateCount`
 - `analysis`
+- `recommendedStyles`
 
-응답 핵심 필드:
+반환 핵심 필드:
 
 - `representativeImages`
 - `lifestyleImages`
@@ -449,10 +398,6 @@ worker 내부 프로파일:
 - `hashtags`
 - `generationMeta`
 
-실제 이미지 생성이 켜져 있으면 `generationMeta.imageEngine`은 worker 엔진 이름을 반환하고, fallback 시에는 placeholder 엔진 이름을 반환합니다.
-
-더 자세한 요청/응답 예시는 `docs/mvp-blueprint.md`에 정리되어 있습니다.
-
 ## 로컬 실행
 
 ### 1. 설치
@@ -461,17 +406,23 @@ worker 내부 프로파일:
 npm install
 ```
 
-만약 로컬 npm 캐시 권한 이슈가 있으면 아래처럼 실행하면 됩니다.
+Python worker를 같이 쓸 경우:
 
 ```bash
-npm install --cache .npm-cache
+python3 -m venv .venv-image-worker
+source .venv-image-worker/bin/activate
+pip install -r requirements.txt
 ```
 
-### 2. 개발 서버 실행
+### 2. 개발 서버
+
+권장:
 
 ```bash
-npm run dev
+npm run dev:3014
 ```
+
+이 스크립트는 `.next`를 정리한 뒤 `3014` 포트로 dev 서버를 띄웁니다.
 
 ### 3. 타입 검사
 
@@ -479,94 +430,66 @@ npm run dev
 npm run typecheck
 ```
 
-### 4. 프로덕션 빌드
+### 4. 빌드
 
 ```bash
 npm run build
 ```
 
-### 5. Docker로 실행
+## VM / 원격 worker 실행 예시
 
 ```bash
-cp .env.example .env
-docker compose config
-docker compose up --build
+cd ~/Lifestyle_Shop
+git pull origin feature/loah
+source .venv-image-worker/bin/activate
+pip install -r requirements.txt
+export IMAGE_WORKER_PROFILE=full
+export IMAGE_WORKER_DEVICE=cuda
+export IMAGE_WORKER_PORT=8080
+export IMAGE_WORKER_TOKEN='YOUR_TOKEN'
+export IMAGE_REFINEMENT_ENABLED=false
+uvicorn workers.image_worker.app:app --host 127.0.0.1 --port 8080
 ```
 
-기본 포트는 `3000`입니다.
-
-이 compose 설정은 `standalone` 기반 프로덕션 실행을 기준으로 잡혀 있습니다. 로컬 개발 핫리로드는 기존처럼 `npm run dev`를 사용하는 편이 단순합니다.
-
-이미지 워커까지 같이 띄우려면:
+health 확인:
 
 ```bash
-docker compose --profile gpu up --build
+curl http://127.0.0.1:8080/health
+curl http://127.0.0.1/health
 ```
 
-그리고 `.env`에서 아래를 켭니다.
-
-```bash
-IMAGE_WORKER_ENABLED=true
-IMAGE_WORKER_URL=http://image-worker:8001
-```
-
-Apple Silicon 로컬 확인용으로는 Docker보다 직접 worker를 띄우는 편이 낫습니다. Docker Desktop 안에서는 `mps` 가속을 그대로 쓰지 못하기 때문입니다.
-
-M1 8GB 기준 권장 설정:
-
-```bash
-IMAGE_WORKER_ENABLED=true
-IMAGE_WORKER_PROFILE=lite-mps
-IMAGE_WORKER_DEVICE=mps
-IMAGE_WORKER_URL=http://127.0.0.1:8001
-IMAGE_WORKER_TIMEOUT_MS=240000
-uvicorn workers.image_worker.app:app --host 0.0.0.0 --port 8001
-```
-
-`lite-mps`는 로컬 미리보기용 경량 프로파일입니다. 속도와 품질은 원격 GPU의 `full` 프로파일보다 낮지만, 테마 레퍼런스를 반영한 실제 라이프스타일 이미지 확인에는 쓸 수 있게 설계했습니다.
-첫 실행은 공개 모델과 adapter weight 다운로드 때문에 수 분이 걸릴 수 있습니다.
-기본 모델 캐시는 저장소 내부의 `.cache/huggingface`를 사용합니다.
-
-운영 시 자주 조정하는 값:
-
-- `APP_PORT`
-- `APP_STORAGE_PATH`
-- `APP_RESTART_POLICY`
-- `APP_LOG_MAX_SIZE`
-- `APP_LOG_MAX_FILE`
-
-## 환경 변수
-
-### 필수는 아님
+## 주요 환경 변수
 
 - `OPENAI_API_KEY`
-- `LANGFUSE_TRACING_ENABLED`
-- `LANGFUSE_PUBLIC_KEY`
-- `LANGFUSE_SECRET_KEY`
-- `LANGFUSE_BASE_URL`
-- `LANGFUSE_TRACING_ENVIRONMENT`
-- `LANGFUSE_RELEASE`
 - `IMAGE_WORKER_ENABLED`
 - `IMAGE_WORKER_URL`
+- `IMAGE_WORKER_TIMEOUT_MS`
 - `IMAGE_WORKER_TOKEN`
 - `IMAGE_WORKER_PROFILE`
 - `IMAGE_WORKER_DEVICE`
+- `IMAGE_REFINEMENT_ENABLED`
 - `IMAGE_MODEL_BASE`
 - `IMAGE_MODEL_CONTROLNET`
 - `IMAGE_MODEL_IP_ADAPTER_REPO`
 - `IMAGE_MODEL_IP_ADAPTER_WEIGHT`
+- `IMAGE_NUM_INFERENCE_STEPS`
+- `IMAGE_GUIDANCE_SCALE`
+- `IMAGE_CONTROLNET_SCALE`
+- `IMAGE_IP_ADAPTER_SCALE`
 
-설정되면 아래 모델을 사용합니다.
+자세한 기본값은 [.env.example](/Users/apple/Lifestyle_Shop/.env.example)에 있습니다.
 
-- `text-embedding-3-small`
-- `gpt-5-mini`
-- `gpt-5-nano`
+## 현재 한계
 
-설정되지 않으면 fallback 모드로 동작합니다.
+- 상품은 아직 “완전한 재생성”이 아니라 “배경 생성 + 상품 합성” 하이브리드입니다.
+- 상품 위치, 원근, 스케일은 계속 개선 중이며 모든 카테고리에서 완벽하지 않습니다.
+- 2-stage refinement는 품질은 좋아질 수 있지만 latency가 크게 늘어 기본값은 꺼져 있습니다.
+- 레퍼런스는 스타일 전용으로 약화해서 쓰지만, 특정 테마에서는 공간 정보가 일부 남을 수 있습니다.
+- 공개된 worker는 봇 스캔 트래픽을 받을 수 있으므로 Nginx 제한 설정을 권장합니다.
 
-- 추천: 휴리스틱 기반
-- 문구 생성: 템플릿 기반
-- 이미지 생성: placeholder 기반
+## 관련 문서
+
+- `docs/mvp-blueprint.md`
 
 Langfuse는 아래 조건일 때만 활성화됩니다.
 
