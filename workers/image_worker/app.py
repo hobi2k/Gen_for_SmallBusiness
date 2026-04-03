@@ -323,41 +323,80 @@ def _make_blank_condition(size: tuple[int, int]):
 
 
 def _make_style_only_reference(image, size: tuple[int, int]):
-    from PIL import Image, ImageEnhance, ImageFilter
+    from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 
     source = image.convert("RGB")
     width, height = source.size
     tile_width = max(96, size[0] // 2)
     tile_height = max(96, size[1] // 2)
-    patch_width = max(96, int(width * 0.42))
-    patch_height = max(96, int(height * 0.42))
+    patch_width = max(96, int(width * 0.34))
+    patch_height = max(96, int(height * 0.34))
 
     crop_boxes = [
         (0, 0),
         (max(0, width - patch_width), 0),
         (0, max(0, height - patch_height)),
         (max(0, width - patch_width), max(0, height - patch_height)),
+        (max(0, (width - patch_width) // 2), max(0, (height - patch_height) // 2)),
     ]
 
-    card = Image.new("RGB", size, (236, 231, 223))
+    palette: list[tuple[int, int, int]] = []
+    texture_tiles = []
 
-    for index, (left, top) in enumerate(crop_boxes):
+    for left, top in crop_boxes:
         crop = source.crop((left, top, left + patch_width, top + patch_height))
-        patch = crop.resize((tile_width, tile_height), Image.Resampling.LANCZOS)
-        patch = patch.filter(ImageFilter.GaussianBlur(radius=max(12, int(min(size) * 0.016))))
+        dominant = crop.resize((1, 1), Image.Resampling.BILINEAR).getpixel((0, 0))
+        palette.append(dominant)
+        patch = ImageOps.fit(crop, (tile_width, tile_height), method=Image.Resampling.LANCZOS)
+        patch = ImageEnhance.Color(patch).enhance(1.08)
+        patch = ImageEnhance.Contrast(patch).enhance(0.92)
+        patch = ImageOps.posterize(patch, 5)
+        patch = patch.filter(ImageFilter.GaussianBlur(radius=max(18, int(min(size) * 0.022))))
         patch = patch.resize(
-            (max(56, tile_width // 7), max(56, tile_height // 7)),
+            (max(40, tile_width // 8), max(40, tile_height // 8)),
             Image.Resampling.BICUBIC,
         ).resize((tile_width, tile_height), Image.Resampling.BICUBIC)
-        patch = ImageEnhance.Color(patch).enhance(1.05)
-        patch = ImageEnhance.Contrast(patch).enhance(0.94)
-        x = 0 if index % 2 == 0 else size[0] - tile_width
-        y = 0 if index < 2 else size[1] - tile_height
-        card.paste(patch, (x, y))
+        patch = Image.blend(Image.new("RGB", (tile_width, tile_height), dominant), patch, 0.46)
+        texture_tiles.append(patch)
 
-    card = card.filter(ImageFilter.GaussianBlur(radius=max(10, int(min(size) * 0.012))))
-    card = ImageEnhance.Color(card).enhance(1.03)
-    card = ImageEnhance.Contrast(card).enhance(0.97)
+    base_color = palette[0] if palette else (236, 231, 223)
+    card = Image.new("RGB", size, base_color)
+
+    grid_positions = [
+        (0, 0),
+        (size[0] - tile_width, 0),
+        (0, size[1] - tile_height),
+        (size[0] - tile_width, size[1] - tile_height),
+    ]
+    for index, patch in enumerate(texture_tiles[:4]):
+        card.paste(patch, grid_positions[index])
+
+    center_patch = texture_tiles[4] if len(texture_tiles) > 4 else texture_tiles[0]
+    center_size = (max(120, int(size[0] * 0.42)), max(120, int(size[1] * 0.3)))
+    center_patch = center_patch.resize(center_size, Image.Resampling.LANCZOS)
+    center_x = (size[0] - center_size[0]) // 2
+    center_y = max(24, int(size[1] * 0.18))
+    card.paste(center_patch, (center_x, center_y))
+
+    draw = ImageDraw.Draw(card)
+    swatch_count = max(3, min(5, len(palette)))
+    swatch_width = max(42, int(size[0] * 0.11))
+    swatch_height = max(18, int(size[1] * 0.05))
+    swatch_gap = max(10, int(size[0] * 0.012))
+    total_width = swatch_count * swatch_width + (swatch_count - 1) * swatch_gap
+    swatch_x = max(18, (size[0] - total_width) // 2)
+    swatch_y = size[1] - swatch_height - max(18, int(size[1] * 0.06))
+    for index, color in enumerate(palette[:swatch_count]):
+        left = swatch_x + index * (swatch_width + swatch_gap)
+        draw.rounded_rectangle(
+            (left, swatch_y, left + swatch_width, swatch_y + swatch_height),
+            radius=max(8, swatch_height // 2),
+            fill=color,
+        )
+
+    card = card.filter(ImageFilter.GaussianBlur(radius=max(12, int(min(size) * 0.014))))
+    card = ImageEnhance.Color(card).enhance(1.02)
+    card = ImageEnhance.Contrast(card).enhance(0.96)
     return card
 
 
@@ -498,7 +537,7 @@ def _placement_profile(product: ProductPayload) -> Literal["flat", "upright", "l
 
     if any(
         term in descriptor
-        for term in ["tray", "쟁반", "트레이", "plate", "접시", "bowl", "볼", "platter"]
+        for term in ["tray", "쟁반", "트레이", "plate", "접시", "platter"]
     ):
         return "flat"
 
@@ -596,12 +635,31 @@ def _reference_span_cm(product: ProductPayload) -> float:
 
 def _dimension_scale_multiplier(product: ProductPayload) -> float:
     span_cm = _footprint_span_cm(product)
+    profile = _placement_profile(product)
     if span_cm is None:
-        return 1.0
+        if profile == "flat":
+            return 0.94
+        if profile == "upright":
+            return 0.92
+        if profile == "linear":
+            return 0.98
+        return 0.95
 
     reference_span = _reference_span_cm(product)
-    multiplier = span_cm / max(reference_span, 1e-6)
-    return max(0.68, min(1.22, multiplier))
+    raw_multiplier = span_cm / max(reference_span, 1e-6)
+
+    if profile == "flat":
+        softened = 1.0 + (raw_multiplier - 1.0) * 0.44
+        return max(0.74, min(1.08, softened))
+    if profile == "upright":
+        softened = 1.0 + (raw_multiplier - 1.0) * 0.36
+        return max(0.76, min(1.02, softened))
+    if profile == "linear":
+        softened = 1.0 + (raw_multiplier - 1.0) * 0.5
+        return max(0.8, min(1.1, softened))
+
+    softened = 1.0 + (raw_multiplier - 1.0) * 0.4
+    return max(0.8, min(1.05, softened))
 
 
 def _dimension_height_ratio(product: ProductPayload) -> Optional[float]:
@@ -663,6 +721,15 @@ def _cutout_fill_ratio(cutout) -> float:
     return float((alpha > 24).mean())
 
 
+def _distance_to_cardinal_axis(angle: float) -> float:
+    normalized = abs(angle)
+    return min(normalized, abs(normalized - 90.0))
+
+
+def _distance_to_vertical_axis(angle: float) -> float:
+    return abs(abs(angle) - 90.0)
+
+
 def _view_selection_score(image, product: ProductPayload, *, is_primary: bool) -> float:
     cutout = _extract_product_cutout(image)
     width, height = cutout.size
@@ -674,21 +741,25 @@ def _view_selection_score(image, product: ProductPayload, *, is_primary: bool) -
     fill_ratio = _cutout_fill_ratio(cutout)
     aspect_ratio = max(width, height) / max(min(width, height), 1)
     orientation = abs(_estimate_cutout_orientation_degrees(cutout))
+    cardinal_distance = _distance_to_cardinal_axis(orientation)
     score = fill_ratio * 1.25
 
     if profile == "flat":
         expected_plan_aspect = _expected_plan_aspect_ratio(product)
-        orientation_score = max(0.0, 1.0 - orientation / 42.0)
-        score += orientation_score * 1.1
+        orientation_score = max(0.0, 1.0 - cardinal_distance / 28.0)
+        score += orientation_score * 1.28
         score += min(0.7, max(0.0, aspect_ratio - 1.0)) * 0.75
         if expected_plan_aspect is not None:
             ratio_gap = abs(aspect_ratio - expected_plan_aspect)
-            score += max(0.0, 1.0 - ratio_gap / max(expected_plan_aspect, 1.0)) * 0.9
+            score += max(0.0, 1.0 - ratio_gap / max(expected_plan_aspect, 1.0)) * 1.12
+            if aspect_ratio < expected_plan_aspect * 0.62:
+                score -= 0.2
 
     elif profile == "upright":
         expected_upright_ratio = _expected_upright_view_ratio(product)
-        orientation_score = max(0.0, 1.0 - orientation / 60.0)
-        score += orientation_score * 0.45
+        vertical_distance = _distance_to_vertical_axis(orientation)
+        orientation_score = max(0.0, 1.0 - vertical_distance / 24.0)
+        score += orientation_score * 0.82
         score += max(0.0, 1.0 - abs(aspect_ratio - 1.35) / 1.35) * 0.35
         if expected_upright_ratio is not None:
             ratio_gap = abs((width / max(height, 1)) - expected_upright_ratio)
@@ -696,16 +767,16 @@ def _view_selection_score(image, product: ProductPayload, *, is_primary: bool) -
 
     elif profile == "linear":
         score += min(1.0, max(0.0, aspect_ratio - 1.3)) * 0.95
-        score += max(0.0, 1.0 - orientation / 70.0) * 0.25
+        score += max(0.0, 1.0 - cardinal_distance / 22.0) * 0.42
 
     else:
-        score += max(0.0, 1.0 - orientation / 55.0) * 0.3
+        score += max(0.0, 1.0 - cardinal_distance / 38.0) * 0.3
 
     if material_profile == "glass":
         score += min(0.24, fill_ratio * 0.18)
 
     if is_primary:
-        score += 0.08
+        score += 0.03
 
     return score
 
@@ -738,20 +809,30 @@ def _dynamic_placement_width_ratio(
     descriptor = _product_descriptor_text(product)
     profile = _placement_profile(product)
 
-    ratio = 0.27 if kind == "representative" else 0.22
+    if profile == "flat":
+        ratio = 0.23 if kind == "representative" else 0.2
+    elif profile == "upright":
+        ratio = 0.17 if kind == "representative" else 0.145
+    elif profile == "linear":
+        ratio = 0.26 if kind == "representative" else 0.22
+    else:
+        ratio = 0.2 if kind == "representative" else 0.17
 
     if aspect_ratio >= 1.75:
-        ratio += 0.08
-    elif aspect_ratio >= 1.35:
         ratio += 0.05
+    elif aspect_ratio >= 1.35:
+        ratio += 0.035
     elif aspect_ratio >= 1.1:
-        ratio += 0.03
+        ratio += 0.02
     elif aspect_ratio <= 0.62:
-        ratio -= 0.05
+        ratio -= 0.04
     elif aspect_ratio <= 0.82:
         ratio -= 0.02
 
-    if any(term in descriptor for term in ["tray", "쟁반", "트레이", "plate", "접시", "rect", "square", "사각", "넓", "wide"]):
+    if any(
+        term in descriptor
+        for term in ["tray", "쟁반", "트레이", "plate", "접시", "rect", "square", "사각", "넓", "wide"]
+    ):
         ratio += 0.01
 
     if any(term in descriptor for term in ["glassware", "glass", "유리잔", "tall", "긴", "높"]):
@@ -769,7 +850,13 @@ def _dynamic_placement_width_ratio(
 
     ratio *= _dimension_scale_multiplier(product)
 
-    return max(0.2, min(0.54, ratio))
+    if profile == "flat":
+        return max(0.18, min(0.4, ratio))
+    if profile == "upright":
+        return max(0.14, min(0.28, ratio))
+    if profile == "linear":
+        return max(0.18, min(0.46, ratio))
+    return max(0.16, min(0.34, ratio))
 
 
 def _analyze_scene_context(scene_image, focus_box: tuple[int, int, int, int]) -> dict[str, float]:
@@ -1017,12 +1104,36 @@ def _target_surface_width_factor(
     kind: Literal["representative", "lifestyle"],
 ) -> float:
     if profile == "flat":
-        return 0.32 if kind == "representative" else 0.28
+        return 0.26 if kind == "representative" else 0.22
     if profile == "upright":
-        return 0.18 if kind == "representative" else 0.14
+        return 0.15 if kind == "representative" else 0.12
     if profile == "linear":
-        return 0.44 if kind == "representative" else 0.36
-    return 0.24 if kind == "representative" else 0.18
+        return 0.34 if kind == "representative" else 0.28
+    return 0.2 if kind == "representative" else 0.16
+
+
+def _max_surface_occupancy(
+    *,
+    profile: Literal["flat", "upright", "linear", "generic"],
+    kind: Literal["representative", "lifestyle"],
+) -> float:
+    if profile == "flat":
+        return 0.42 if kind == "representative" else 0.38
+    if profile == "upright":
+        return 0.24 if kind == "representative" else 0.2
+    if profile == "linear":
+        return 0.5 if kind == "representative" else 0.44
+    return 0.3 if kind == "representative" else 0.26
+
+
+def _surface_side_margin_ratio(profile: Literal["flat", "upright", "linear", "generic"]) -> float:
+    if profile == "flat":
+        return 0.12
+    if profile == "upright":
+        return 0.18
+    if profile == "linear":
+        return 0.14
+    return 0.16
 
 
 def _score_empty_surface(
@@ -1127,17 +1238,25 @@ def _select_placement_region(
 
     for candidate in candidates:
         candidate_width = int(candidate["right"] - candidate["left"])
-        surface_target_width = max(120, int(candidate_width * surface_factor))
+        side_margin = int(candidate_width * _surface_side_margin_ratio(profile))
+        usable_left = max(0, int(candidate["left"]) + side_margin)
+        usable_right = min(scene_width, int(candidate["right"]) - side_margin)
+        usable_width = usable_right - usable_left
+        if usable_width < 120:
+            continue
+
+        surface_target_width = max(104, int(usable_width * surface_factor))
+        max_surface_width = max(
+            110,
+            int(usable_width * _max_surface_occupancy(profile=profile, kind=kind)),
+        )
         lower_bias = min(1.0, max(0.0, (candidate["y"] / max(scene_height, 1) - 0.54) / 0.3))
         depth_scale = (
-            0.64 + lower_bias * 0.18
+            0.58 + lower_bias * 0.14
             if profile == "flat"
-            else 0.74 + lower_bias * 0.24
+            else 0.68 + lower_bias * 0.18
         )
-        target_width = min(
-            int(candidate_width * (0.56 if profile == "flat" else 0.72)),
-            int(max(base_target_width, surface_target_width) * depth_scale),
-        )
+        target_width = min(max_surface_width, int(max(base_target_width, surface_target_width) * depth_scale))
         target_height = max(110, int(target_width * cutout_aspect))
         free_height = int(candidate["y"] - candidate["top"])
         if free_height > 0 and target_height > int(free_height * 0.86):
@@ -1145,14 +1264,14 @@ def _select_placement_region(
             target_height = max(90, shrink)
             target_width = max(110, int(target_height / max(cutout_aspect, 1e-6)))
 
-        contact_lift = max(1, int(target_height * (0.012 if profile == "flat" else 0.02)))
-        start_x = int(candidate["left"] + target_width / 2)
-        end_x = int(candidate["right"] - target_width / 2)
+        contact_lift = max(1, int(target_height * (0.006 if profile == "flat" else 0.016)))
+        start_x = int(usable_left + target_width / 2)
+        end_x = int(usable_right - target_width / 2)
         if end_x < start_x:
             continue
 
         if profile == "flat":
-            candidate_center = int(candidate["x"])
+            candidate_center = int(min(max(candidate["x"], start_x), end_x))
             spread = max(18, int(candidate_width * 0.08))
             center_positions = [
                 max(start_x, min(end_x, candidate_center)),
@@ -1205,8 +1324,8 @@ def _select_placement_region(
                     "target_height": float(target_height),
                     "angle": float(candidate["angle"]),
                     "confidence": float(score),
-                    "surface_left": float(candidate["left"]),
-                    "surface_right": float(candidate["right"]),
+                    "surface_left": float(usable_left),
+                    "surface_right": float(usable_right),
                     "surface_top": float(candidate["top"]),
                     "surface_bottom": float(candidate["bottom"]),
                 }
@@ -1567,9 +1686,9 @@ def _clear_reserved_zone_conflicts(
     scene_rgba = scene.convert("RGBA")
     scene_width, scene_height = scene_rgba.size
 
-    pad_x = int(target_width * (0.18 if profile == "upright" else 0.12 if profile == "flat" else 0.16))
-    pad_top = int(target_height * (0.06 if profile == "flat" else 0.1))
-    pad_bottom = int(target_height * (0.12 if profile == "upright" else 0.08))
+    pad_x = int(target_width * (0.24 if profile == "upright" else 0.18 if profile == "flat" else 0.2))
+    pad_top = int(target_height * (0.08 if profile == "flat" else 0.12))
+    pad_bottom = int(target_height * (0.14 if profile == "upright" else 0.1))
     zone_box = (
         max(0, product_x - pad_x),
         max(0, product_y - pad_top),
@@ -1581,7 +1700,7 @@ def _clear_reserved_zone_conflicts(
         return scene_rgba
 
     roi = scene_rgba.crop(zone_box)
-    blur_radius = max(14, int(target_width * (0.065 if profile == "flat" else 0.05)))
+    blur_radius = max(16, int(target_width * (0.075 if profile == "flat" else 0.06)))
     softened = roi.filter(ImageFilter.GaussianBlur(radius=blur_radius))
 
     sample_strip = roi.crop(
@@ -1596,7 +1715,7 @@ def _clear_reserved_zone_conflicts(
         int(channel)
         for channel in sample_strip.resize((1, 1), Image.Resampling.BILINEAR).getpixel((0, 0))
     )
-    tint_strength = 0.28 if profile == "flat" else 0.18
+    tint_strength = 0.32 if profile == "flat" else 0.22
     tint_layer = Image.new("RGBA", roi.size, (*mean_color, 255))
     softened = Image.blend(softened, tint_layer, tint_strength)
 
@@ -1628,9 +1747,11 @@ def _build_refinement_prompt(product: ProductPayload) -> str:
 
     prompt_parts = [
         f"photorealistic {category_label} integrated naturally on the tabletop",
+        "exactly one product only",
         "preserve exact product identity",
         "preserve exact silhouette",
         "preserve handle rim and proportions",
+        "product resting naturally on the dining table surface",
         "match surrounding light and reflections",
         "realistic contact shadow",
         "realistic material response",
@@ -1643,6 +1764,31 @@ def _build_refinement_prompt(product: ProductPayload) -> str:
     return ", ".join(prompt_parts)
 
 
+def _should_run_refinement(
+    *,
+    kind: Literal["representative", "lifestyle"],
+    product: ProductPayload,
+    placement_confidence: float,
+    target_width: int,
+    target_height: int,
+) -> bool:
+    if not IMAGE_REFINEMENT_ENABLED:
+        return False
+
+    if EFFECTIVE_DEVICE != "cuda":
+        return False
+
+    profile = _placement_profile(product)
+    min_confidence = 0.56 if kind == "representative" else 0.64
+    if placement_confidence < min_confidence:
+        return False
+
+    min_width = 220 if profile == "flat" else 180 if profile == "upright" else 190
+    min_height = 110 if profile == "flat" else 130
+
+    return target_width >= min_width and target_height >= min_height
+
+
 def _refine_with_inpaint(
     *,
     scene,
@@ -1652,7 +1798,6 @@ def _refine_with_inpaint(
     product: ProductPayload,
     kind: Literal["representative", "lifestyle"],
 ):
-    import numpy as np
     from PIL import Image, ImageDraw, ImageFilter
 
     if not IMAGE_REFINEMENT_ENABLED:
@@ -1775,7 +1920,7 @@ def _compose_identity_locked_image(
     target_width = int(placement["target_width"])
     target_height = int(placement["target_height"])
 
-    max_height = int(scene_height * (0.42 if kind == "representative" else 0.34))
+    max_height = int(scene_height * (0.38 if kind == "representative" else 0.31))
     if target_height > max_height:
         scale = max_height / max(target_height, 1)
         target_width = int(target_width * scale)
@@ -1784,9 +1929,7 @@ def _compose_identity_locked_image(
     center_x = int(placement["center_x"])
     profile = _placement_profile(product)
     bottom_y = int(placement["bottom_y"])
-    bottom_y = max(int(scene_height * 0.64), min(int(scene_height * 0.92), bottom_y))
-    rough_x = center_x - target_width // 2
-    rough_y = bottom_y - target_height
+    bottom_y = max(int(scene_height * 0.66), min(int(scene_height * 0.88), bottom_y))
 
     context_box = (
         max(int(placement["surface_left"]) - int(target_width * 0.2), 0),
@@ -1810,10 +1953,14 @@ def _compose_identity_locked_image(
         center_x = int(scene_width * 0.5 if placement["confidence"] <= 0 else center_x)
         product_x = center_x - target_width // 2
 
-    contact_lift = max(1, int(target_height * (0.012 if profile == "flat" else 0.02)))
+    contact_lift = max(1, int(target_height * (0.006 if profile == "flat" else 0.016)))
     product_y = bottom_y - target_height - contact_lift
-    left_bound = max(4, int(placement["surface_left"]))
-    right_bound = min(scene_width - 4, int(placement["surface_right"]))
+    side_margin = max(4, int(target_width * (0.08 if profile == "flat" else 0.1)))
+    left_bound = max(4, int(placement["surface_left"]) + side_margin)
+    right_bound = min(scene_width - 4, int(placement["surface_right"]) - side_margin)
+    if right_bound - left_bound < 96:
+        left_bound = max(4, int(placement["surface_left"]))
+        right_bound = min(scene_width - 4, int(placement["surface_right"]))
     if target_width > max(80, right_bound - left_bound):
         shrink_scale = max(0.58, (right_bound - left_bound) / max(target_width, 1))
         target_width = max(96, int(target_width * shrink_scale))
@@ -1916,14 +2063,21 @@ def _compose_identity_locked_image(
         context=scene_context,
         product=product,
     )
-    scene = _refine_with_inpaint(
-        scene=scene,
-        product_layer=softened,
-        product_x=product_x,
-        product_y=product_y,
-        product=product,
+    if _should_run_refinement(
         kind=kind,
-    )
+        product=product,
+        placement_confidence=float(placement["confidence"]),
+        target_width=target_width,
+        target_height=target_height,
+    ):
+        scene = _refine_with_inpaint(
+            scene=scene,
+            product_layer=softened,
+            product_x=product_x,
+            product_y=product_y,
+            product=product,
+            kind=kind,
+        )
 
     return scene.convert("RGB")
 
