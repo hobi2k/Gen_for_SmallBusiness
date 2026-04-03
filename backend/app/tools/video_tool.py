@@ -22,6 +22,35 @@ from backend.app.tools.runtime_support import (
 logger = logging.getLogger(__name__)
 
 
+def _snap_video_dimension(value: int) -> int:
+    """
+    Wan이 요구하는 16 배수 해상도로 맞춘다.
+
+    Args:
+        value: 원본 해상도 값
+
+    Returns:
+        16 배수로 보정된 값
+    """
+
+    return max(256, (value // 16) * 16)
+
+
+def _normalize_video_dimensions(width: int, height: int) -> tuple[int, int]:
+    """
+    Wan 입력 전에 해상도를 16 배수로 정리한다.
+
+    Args:
+        width: 요청 너비
+        height: 요청 높이
+
+    Returns:
+        Wan에 실제로 넣을 해상도
+    """
+
+    return _snap_video_dimension(width), _snap_video_dimension(height)
+
+
 def select_key_visual(
     detail_paths: list[str],
     banner_paths: list[str],
@@ -278,12 +307,24 @@ def _try_generate_with_wan(
 
     try:
         from diffusers.utils import export_to_video
+        normalized_width, normalized_height = _normalize_video_dimensions(
+            payload.video_width,
+            payload.video_height,
+        )
+        if (normalized_width, normalized_height) != (payload.video_width, payload.video_height):
+            logger.info(
+                "Wan 입력 해상도를 16 배수로 보정합니다: %sx%s -> %sx%s",
+                payload.video_width,
+                payload.video_height,
+                normalized_width,
+                normalized_height,
+            )
 
         logger.info(
             "Wan 영상 생성을 시작합니다. 길이=%s초, 해상도=%sx%s, fps=%s, steps=%s",
             payload.video_duration_seconds,
-            payload.video_width,
-            payload.video_height,
+            normalized_width,
+            normalized_height,
             payload.video_fps,
             payload.video_inference_steps,
         )
@@ -292,8 +333,8 @@ def _try_generate_with_wan(
             pipe = _get_wan_i2v_pipeline()
             source_image = _prepare_video_key_visual(
                 key_visual_path,
-                payload.video_width,
-                payload.video_height,
+                normalized_width,
+                normalized_height,
             )
         else:
             logger.info("입력 이미지 없이 t2v 경로로 진행합니다.")
@@ -333,8 +374,8 @@ def _try_generate_with_wan(
                     "vertical short-form ad, no subtitles burned into image."
                 ),
                 "negative_prompt": negative_prompt,
-                "height": payload.video_height,
-                "width": payload.video_width,
+                "height": normalized_height,
+                "width": normalized_width,
                 "num_frames": segment_duration * target_fps + 1,
                 "guidance_scale": 6.0,
                 "num_inference_steps": payload.video_inference_steps,
@@ -346,8 +387,8 @@ def _try_generate_with_wan(
                 "영상 세그먼트 %s/%s Wan 호출 시작: 해상도=%sx%s, fps=%s, frames=%s, steps=%s",
                 index,
                 total_segments,
-                payload.video_width,
-                payload.video_height,
+                normalized_width,
+                normalized_height,
                 target_fps,
                 call_kwargs["num_frames"],
                 payload.video_inference_steps,
