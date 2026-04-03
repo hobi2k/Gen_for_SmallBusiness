@@ -61,11 +61,11 @@ function productPlacementDirective(product: ProductAnalysis): string {
     .toLowerCase();
 
   if (/(tray|쟁반|트레이|plate|접시)/.test(descriptor)) {
-    return "empty kitchen or dining tabletop seen clearly from a gentle top-front angle, broad flat placement zone reserved in the lower foreground, object intended to rest fully on the table surface, product plane aligned parallel to the table edge, no props or furniture inside that reserved zone";
+    return "empty kitchen or dining tabletop seen clearly from a gentle top-front angle, broad flat placement zone reserved in the lower foreground, front table edge nearly horizontal in frame, object intended to rest fully on the table surface, product plane aligned parallel to the table edge, no props or furniture inside that reserved zone";
   }
 
   if (/(bowl|볼)/.test(descriptor)) {
-    return "empty kitchen or dining tabletop with a placemat or clear table surface visible, reserved placement zone centered on the table, object intended to sit stably on the tabletop, no props inside the reserved zone";
+    return "empty kitchen or dining tabletop with a clear surface visible, reserved placement zone centered on the table, object intended to sit stably on the tabletop, no props inside the reserved zone";
   }
 
   if (/(cup|glass|glassware|컵|유리잔)/.test(descriptor)) {
@@ -73,7 +73,7 @@ function productPlacementDirective(product: ProductAnalysis): string {
   }
 
   if (/(cutlery|fork|knife|spoon|커트러리|포크|나이프|수저)/.test(descriptor)) {
-    return "empty kitchen or dining tabletop with a horizontal setting area reserved in the foreground, object intended to rest flat on the table surface near a place setting, no plates or bowls inside the reserved zone";
+    return "empty kitchen or dining tabletop with a horizontal empty surface reserved in the foreground, object intended to rest flat on the table surface, no place setting and no plates or bowls inside the reserved zone";
   }
 
   return "empty kitchen or dining tabletop clearly visible in the lower foreground, reserved placement zone on the table surface, no foreground props inside the reserved zone";
@@ -94,20 +94,28 @@ function backgroundObjectBanTerms(product: ProductAnalysis): string[] {
     "plate",
     "platter",
     "dish",
+    "dishware",
     "bowl",
     "cup",
     "mug",
     "glass",
+    "glassware",
     "goblet",
     "tray",
     "serving tray",
+    "serving dish",
     "cutlery",
     "fork",
     "knife",
     "spoon",
     "utensil set",
     "tablescape",
-    "meal setup"
+    "meal setup",
+    "place setting",
+    "food plating",
+    "table decor on table",
+    "breakfast setup",
+    "dessert setup"
   ];
 
   if (/(cup|glass|glassware|mug|컵|유리잔|머그)/.test(descriptor)) {
@@ -127,6 +135,15 @@ function backgroundObjectBanTerms(product: ProductAnalysis): string[] {
 
 function backgroundObjectBanDirective(product: ProductAnalysis): string {
   return `ban these objects anywhere in frame: ${backgroundObjectBanTerms(product).join(", ")}`;
+}
+
+function emptyTableDisciplineDirective(product: ProductAnalysis): string {
+  return [
+    "visible dining table must stay completely empty",
+    "no dishware, glassware, serving ware, cutlery, food, or table setting anywhere on the visible table",
+    "background props must stay off the visible table and remain secondary",
+    `never render another ${promptCategory(product)} in the scene`
+  ].join(", ");
 }
 
 const COPY_SCHEMA = JSON.stringify(
@@ -282,12 +299,11 @@ function filteredAccentProps(style: StylePreset, product: ProductAnalysis): stri
   const isFlatOrUprightTableware = /(tray|쟁반|트레이|plate|접시|bowl|볼|cup|glass|glassware|컵|유리잔)/.test(
     descriptor
   );
+  if (isFlatOrUprightTableware) {
+    return [];
+  }
   if (!blockedTokens.length) {
-    return isFlatOrUprightTableware
-      ? style.sceneProfile.accentProps.filter(
-          (prop) => !/(tray|plate|bowl|cup|mug|glass|dish|serving|tea utensil|ceramic bowl|pastry plate)/i.test(prop)
-        )
-      : style.sceneProfile.accentProps;
+    return style.sceneProfile.accentProps;
   }
 
   return style.sceneProfile.accentProps.filter((prop) => {
@@ -369,6 +385,35 @@ function buildNegativePrompt(style: StylePreset, product: ProductAnalysis): stri
   return Array.from(new Set(terms.map((term) => term.trim()).filter(Boolean))).join(", ");
 }
 
+function clarityDirective(aspectRatio: "1:1" | "4:5" | "9:16"): string {
+  if (aspectRatio === "9:16") {
+    return [
+      "clear air with no haze or mist",
+      "crisp tabletop texture and clean cabinet edges",
+      "controlled highlights with no bloom",
+      "balanced exposure with no washed-out veil",
+      "sharp realistic interior detail"
+    ].join(", ");
+  }
+
+  if (aspectRatio === "4:5") {
+    return [
+      "clean air with no haze",
+      "crisp tabletop texture",
+      "controlled highlights with no bloom",
+      "balanced exposure",
+      "clean realistic interior detail"
+    ].join(", ");
+  }
+
+  return [
+    "clean air with no haze",
+    "controlled highlights with no bloom",
+    "balanced exposure",
+    "clean realistic interior detail"
+  ].join(", ");
+}
+
 function buildRepresentativePrompt(style: StylePreset, product: ProductAnalysis): string {
   const accentProps = filteredAccentProps(style, product);
   const dimensionHint = promptDimensionHint(product);
@@ -381,6 +426,7 @@ function buildRepresentativePrompt(style: StylePreset, product: ProductAnalysis)
     `foreground surface detail: ${style.sceneProfile.tableSurface}`,
     `background styling cues: ${style.sceneProfile.backgroundElements}`,
     productPlacementDirective(product),
+    emptyTableDisciplineDirective(product),
     backgroundObjectBanDirective(product),
     style.promptKeywords.join(", "),
     `allowed accent props: ${accentProps.join(", ") || "none"}`,
@@ -397,6 +443,7 @@ function buildRepresentativePrompt(style: StylePreset, product: ProductAnalysis)
     "no duplicate object",
     "no same-category object anywhere else in the frame",
     "no tableware or serving objects anywhere else in the frame",
+    "no plates, bowls, glasses, trays, or cutlery anywhere in frame",
     "no chairs, tableware, flowers, lamps, or decor inside the reserved product zone",
     "camera focused on the table surface, not the room",
     "style reference should influence mood, color, material, and lighting only",
@@ -404,12 +451,17 @@ function buildRepresentativePrompt(style: StylePreset, product: ProductAnalysis)
     "centered composition",
     "clean commercial lighting",
     "background only for later product compositing",
+    clarityDirective("1:1"),
     "photorealistic",
     "no text"
   ].join(", ");
 }
 
-function buildLifestylePrompt(style: StylePreset, product: ProductAnalysis): string {
+function buildLifestylePrompt(
+  style: StylePreset,
+  product: ProductAnalysis,
+  aspectRatio: "4:5" | "9:16"
+): string {
   const accentProps = filteredAccentProps(style, product);
   const dimensionHint = promptDimensionHint(product);
 
@@ -421,6 +473,7 @@ function buildLifestylePrompt(style: StylePreset, product: ProductAnalysis): str
     `foreground surface detail: ${style.sceneProfile.tableSurface}`,
     `background styling cues: ${style.sceneProfile.backgroundElements}`,
     productPlacementDirective(product),
+    emptyTableDisciplineDirective(product),
     backgroundObjectBanDirective(product),
     style.promptKeywords.join(", "),
     `allowed accent props: ${accentProps.join(", ") || "none"}`,
@@ -434,6 +487,7 @@ function buildLifestylePrompt(style: StylePreset, product: ProductAnalysis): str
     "no duplicate object",
     "no same-category object anywhere else in the frame",
     "no tableware or serving objects anywhere else in the frame",
+    "no plates, bowls, glasses, trays, or cutlery anywhere in frame",
     "no cups, plates, bowls, trays, flowers, or decor inside the reserved product zone",
     "style reference should influence mood, color, material, and lighting only",
     "do not copy the reference room layout",
@@ -441,6 +495,7 @@ function buildLifestylePrompt(style: StylePreset, product: ProductAnalysis): str
     "props secondary",
     "background only for later product compositing",
     "realistic table depth",
+    clarityDirective(aspectRatio),
     "photorealistic",
     "no text"
   ].join(", ");
@@ -484,8 +539,8 @@ export function buildPromptBundle(
   return {
     representative: [{ aspectRatio: "1:1", prompt: buildRepresentativePrompt(style, product) }],
     lifestyle: [
-      { aspectRatio: "4:5", prompt: buildLifestylePrompt(style, product) },
-      { aspectRatio: "9:16", prompt: buildLifestylePrompt(style, product) }
+      { aspectRatio: "4:5", prompt: buildLifestylePrompt(style, product, "4:5") },
+      { aspectRatio: "9:16", prompt: buildLifestylePrompt(style, product, "9:16") }
     ],
     negativePrompt: buildNegativePrompt(style, product),
     copyPrompt: buildCopyPrompt(style, product),
