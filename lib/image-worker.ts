@@ -110,7 +110,7 @@ async function loadSupplementalImagePayloads(product: ProductAnalysis) {
 }
 
 function defaultWorkerTimeoutMs() {
-  return process.env.IMAGE_WORKER_PROFILE === "lite-mps" ? 480000 : 45000;
+  return process.env.IMAGE_WORKER_PROFILE === "lite-mps" ? 480000 : 100000;
 }
 
 export function isImageWorkerConfigured() {

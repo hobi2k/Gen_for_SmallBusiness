@@ -25,15 +25,22 @@ os.environ.setdefault("TRANSFORMERS_CACHE", str(MODEL_CACHE_ROOT / "transformers
 
 IMAGE_WORKER_TOKEN = os.getenv("IMAGE_WORKER_TOKEN", "").strip()
 IMAGE_WORKER_PROFILE = os.getenv("IMAGE_WORKER_PROFILE", "full").strip().lower() or "full"
-IMAGE_REFINEMENT_ENABLED = (
-    os.getenv("IMAGE_REFINEMENT_ENABLED", "false").strip().lower() == "true"
-)
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name, "").strip().lower()
+    if not value:
+        return default
+
+    return value in {"1", "true", "yes", "on"}
 
 PROFILE_DEFAULTS = {
     "full": {
         "base_model": "stabilityai/stable-diffusion-xl-base-1.0",
         "inpaint_model": "diffusers/stable-diffusion-xl-1.0-inpainting-0.1",
         "controlnet_model": "diffusers/controlnet-canny-sdxl-1.0",
+        "depth_controlnet_model": "xinsir/controlnet-depth-sdxl-1.0",
+        "depth_estimator_model": "Intel/dpt-hybrid-midas",
         "ip_adapter_repo": "h94/IP-Adapter",
         "ip_adapter_weight": "ip-adapter_sdxl.bin",
         "pipeline_kind": "sdxl",
@@ -42,6 +49,9 @@ PROFILE_DEFAULTS = {
         "default_guidance": 5.8,
         "default_control_scale": 0.62,
         "default_ip_scale": 0.72,
+        "default_refinement_control_scale": 0.48,
+        "default_refinement_ip_scale": 0.26,
+        "default_depth_refinement_enabled": True,
         "engine": "sdxl-controlnet-ipadapter-worker",
         "target_sizes": {
             "1:1": (1024, 1024),
@@ -53,6 +63,8 @@ PROFILE_DEFAULTS = {
         "base_model": "stable-diffusion-v1-5/stable-diffusion-v1-5",
         "inpaint_model": "runwayml/stable-diffusion-inpainting",
         "controlnet_model": "lllyasviel/control_v11p_sd15_canny",
+        "depth_controlnet_model": "",
+        "depth_estimator_model": "Intel/dpt-hybrid-midas",
         "ip_adapter_repo": "h94/IP-Adapter",
         "ip_adapter_weight": "ip-adapter_sd15.bin",
         "pipeline_kind": "sd15",
@@ -61,6 +73,9 @@ PROFILE_DEFAULTS = {
         "default_guidance": 4.5,
         "default_control_scale": 0.55,
         "default_ip_scale": 0.62,
+        "default_refinement_control_scale": 0.0,
+        "default_refinement_ip_scale": 0.0,
+        "default_depth_refinement_enabled": False,
         "engine": "sd15-controlnet-ipadapter-mps-worker",
         "target_sizes": {
             "1:1": (640, 640),
@@ -69,6 +84,17 @@ PROFILE_DEFAULTS = {
         },
     },
 }
+
+IMAGE_REFINEMENT_ENABLED = _env_flag("IMAGE_REFINEMENT_ENABLED", False)
+IMAGE_DEPTH_REFINEMENT_ENABLED = _env_flag(
+    "IMAGE_DEPTH_REFINEMENT_ENABLED",
+    bool(
+        PROFILE_DEFAULTS.get(IMAGE_WORKER_PROFILE, PROFILE_DEFAULTS["full"]).get(
+            "default_depth_refinement_enabled",
+            False,
+        )
+    ),
+)
 
 CPU_FALLBACK_TARGET_SIZES = {
     "1:1": (320, 320),
@@ -93,6 +119,14 @@ def _resolve_runtime_config() -> dict[str, Any]:
         "base_model": _env_or_default("IMAGE_MODEL_BASE", profile["base_model"]),
         "inpaint_model": _env_or_default("IMAGE_MODEL_INPAINT", profile["inpaint_model"]),
         "controlnet_model": _env_or_default("IMAGE_MODEL_CONTROLNET", profile["controlnet_model"]),
+        "depth_controlnet_model": _env_or_default(
+            "IMAGE_MODEL_DEPTH_CONTROLNET",
+            profile["depth_controlnet_model"],
+        ),
+        "depth_estimator_model": _env_or_default(
+            "IMAGE_MODEL_DEPTH_ESTIMATOR",
+            profile["depth_estimator_model"],
+        ),
         "ip_adapter_repo": _env_or_default("IMAGE_MODEL_IP_ADAPTER_REPO", profile["ip_adapter_repo"]),
         "ip_adapter_weight": _env_or_default("IMAGE_MODEL_IP_ADAPTER_WEIGHT", profile["ip_adapter_weight"]),
         "pipeline_kind": profile["pipeline_kind"],
@@ -105,6 +139,18 @@ def _resolve_runtime_config() -> dict[str, Any]:
             _env_or_default("IMAGE_CONTROLNET_SCALE", str(profile["default_control_scale"]))
         ),
         "ip_scale": float(_env_or_default("IMAGE_IP_ADAPTER_SCALE", str(profile["default_ip_scale"]))),
+        "refinement_control_scale": float(
+            _env_or_default(
+                "IMAGE_REFINEMENT_DEPTH_CONTROL_SCALE",
+                str(profile["default_refinement_control_scale"]),
+            )
+        ),
+        "refinement_ip_scale": float(
+            _env_or_default(
+                "IMAGE_REFINEMENT_IP_ADAPTER_SCALE",
+                str(profile["default_refinement_ip_scale"]),
+            )
+        ),
         "engine": profile["engine"],
         "target_sizes": profile["target_sizes"],
     }
@@ -148,11 +194,16 @@ IP_ADAPTER_ENABLED = EFFECTIVE_DEVICE != "cpu"
 
 _PIPELINE = None
 _REFINEMENT_PIPELINE = None
+_REFINEMENT_PIPELINE_MODE = "disabled"
+_DEPTH_ESTIMATOR = None
+_DEPTH_ESTIMATOR_PROCESSOR = None
 _PIPELINE_LOCK = Lock()
 _REFINEMENT_PIPELINE_LOCK = Lock()
+_DEPTH_ESTIMATOR_LOCK = Lock()
 _INFERENCE_LOCK = Lock()
 _PIPELINE_LOAD_ERROR: Optional[str] = None
 _REFINEMENT_PIPELINE_LOAD_ERROR: Optional[str] = None
+_DEPTH_ESTIMATOR_LOAD_ERROR: Optional[str] = None
 _LAST_RUNTIME_ERROR: Optional[str] = None
 _CUTOUT_SESSION = None
 _CUTOUT_SESSION_LOCK = Lock()
@@ -1797,6 +1848,7 @@ def _refine_with_inpaint(
     product_y: int,
     product: ProductPayload,
     kind: Literal["representative", "lifestyle"],
+    style_reference_image=None,
 ):
     from PIL import Image, ImageDraw, ImageFilter
 
@@ -1851,6 +1903,15 @@ def _refine_with_inpaint(
 
     resized_roi = roi.resize(target_size, Image.Resampling.LANCZOS)
     resized_mask = mask.resize(target_size, Image.Resampling.LANCZOS)
+    refinement_ip_adapter_image = None
+    if style_reference_image is not None and IP_ADAPTER_ENABLED:
+        refinement_ip_adapter_image = _make_style_only_reference(style_reference_image, target_size)
+
+    depth_control_image = None
+    if _REFINEMENT_PIPELINE_MODE == "depth-inpaint":
+        depth_control_image = _make_depth_control_image(resized_roi)
+        if depth_control_image is None:
+            return scene_rgba
 
     refinement_seed = _deterministic_seed(
         "refine",
@@ -1865,23 +1926,30 @@ def _refine_with_inpaint(
         import torch
 
         generator = _build_generator(torch, refinement_seed)
+        pipeline_kwargs: dict[str, Any] = {
+            "prompt": _build_refinement_prompt(product),
+            "negative_prompt": ", ".join(
+                [
+                    _product_negative_terms(product),
+                    "duplicate product, second product, extra object, extra cup, floating object, malformed handle, malformed rim, warped perspective",
+                ]
+            ),
+            "image": resized_roi,
+            "mask_image": resized_mask,
+            "num_inference_steps": 10 if EFFECTIVE_DEVICE == "cuda" else 6,
+            "guidance_scale": 4.0,
+            "strength": 0.18 if _material_profile(product) == "glass" else 0.16,
+            "generator": generator,
+        }
+        if refinement_ip_adapter_image is not None:
+            pipeline_kwargs["ip_adapter_image"] = refinement_ip_adapter_image
+        if depth_control_image is not None:
+            pipeline_kwargs["control_image"] = depth_control_image
+            pipeline_kwargs["controlnet_conditioning_scale"] = _effective_refinement_control_scale()
+
         with _INFERENCE_LOCK:
             _reset_scheduler(pipeline)
-            refined = pipeline(
-                prompt=_build_refinement_prompt(product),
-                negative_prompt=", ".join(
-                    [
-                        _product_negative_terms(product),
-                        "duplicate product, second product, extra object, extra cup, floating object, malformed handle, malformed rim, warped perspective",
-                    ]
-                ),
-                image=resized_roi,
-                mask_image=resized_mask,
-                num_inference_steps=10 if EFFECTIVE_DEVICE == "cuda" else 6,
-                guidance_scale=4.0,
-                strength=0.18 if _material_profile(product) == "glass" else 0.16,
-                generator=generator,
-            ).images[0]
+            refined = pipeline(**pipeline_kwargs).images[0]
     except Exception:
         return scene_rgba
 
@@ -1897,6 +1965,7 @@ def _compose_identity_locked_image(
     product_image,
     kind: Literal["representative", "lifestyle"],
     product: ProductPayload,
+    style_reference_image=None,
 ):
     from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
@@ -2077,6 +2146,7 @@ def _compose_identity_locked_image(
             product_y=product_y,
             product=product,
             kind=kind,
+            style_reference_image=style_reference_image,
         )
 
     return scene.convert("RGB")
@@ -2175,6 +2245,26 @@ def _effective_ip_adapter_scale() -> float:
     return min(style_only_scale, 0.42) if EFFECTIVE_DEVICE == "cpu" else min(style_only_scale, 0.48)
 
 
+def _depth_refinement_available() -> bool:
+    return (
+        IMAGE_DEPTH_REFINEMENT_ENABLED
+        and IMAGE_REFINEMENT_ENABLED
+        and EFFECTIVE_DEVICE == "cuda"
+        and str(RUNTIME_CONFIG["pipeline_kind"]) == "sdxl"
+        and bool(str(RUNTIME_CONFIG["depth_controlnet_model"]).strip())
+    )
+
+
+def _effective_refinement_ip_adapter_scale() -> float:
+    configured_scale = float(RUNTIME_CONFIG["refinement_ip_scale"])
+    return max(0.0, min(configured_scale, 0.34))
+
+
+def _effective_refinement_control_scale() -> float:
+    configured_scale = float(RUNTIME_CONFIG["refinement_control_scale"])
+    return max(0.0, min(configured_scale, 0.65))
+
+
 def _engine_name() -> str:
     if EFFECTIVE_DEVICE == "cpu":
         return "sd15-controlnet-cpu-lite-worker"
@@ -2254,9 +2344,95 @@ def _load_pipeline():
             raise HTTPException(status_code=503, detail=f"pipeline_init_failed: {_PIPELINE_LOAD_ERROR}") from error
 
 
+def _load_depth_estimator():
+    global _DEPTH_ESTIMATOR
+    global _DEPTH_ESTIMATOR_PROCESSOR
+    global _DEPTH_ESTIMATOR_LOAD_ERROR
+
+    if not _depth_refinement_available():
+        return None, None
+
+    if _DEPTH_ESTIMATOR is not None and _DEPTH_ESTIMATOR_PROCESSOR is not None:
+        return _DEPTH_ESTIMATOR_PROCESSOR, _DEPTH_ESTIMATOR
+
+    with _DEPTH_ESTIMATOR_LOCK:
+        if _DEPTH_ESTIMATOR is not None and _DEPTH_ESTIMATOR_PROCESSOR is not None:
+            return _DEPTH_ESTIMATOR_PROCESSOR, _DEPTH_ESTIMATOR
+
+        try:
+            import torch
+            from transformers import AutoImageProcessor, DPTForDepthEstimation
+
+            processor = AutoImageProcessor.from_pretrained(str(RUNTIME_CONFIG["depth_estimator_model"]))
+            estimator = DPTForDepthEstimation.from_pretrained(
+                str(RUNTIME_CONFIG["depth_estimator_model"]),
+                torch_dtype=_torch_dtype(torch, EFFECTIVE_DEVICE),
+            )
+
+            if EFFECTIVE_DEVICE == "cuda":
+                estimator = estimator.to("cuda")
+            else:
+                estimator = estimator.to("cpu")
+
+            estimator.eval()
+            _DEPTH_ESTIMATOR_PROCESSOR = processor
+            _DEPTH_ESTIMATOR = estimator
+            _DEPTH_ESTIMATOR_LOAD_ERROR = None
+            return processor, estimator
+        except Exception as error:  # pragma: no cover - runtime path
+            _DEPTH_ESTIMATOR_LOAD_ERROR = str(error)
+            return None, None
+
+
+def _make_depth_control_image(image):
+    import numpy as np
+    from PIL import Image
+
+    if not _depth_refinement_available():
+        return None
+
+    processor, estimator = _load_depth_estimator()
+    if processor is None or estimator is None:
+        return None
+
+    try:
+        import torch
+
+        inputs = processor(images=image.convert("RGB"), return_tensors="pt")
+        if EFFECTIVE_DEVICE == "cuda":
+            inputs = {
+                key: value.to("cuda") if hasattr(value, "to") else value
+                for key, value in inputs.items()
+            }
+
+        with torch.no_grad():
+            outputs = estimator(**inputs)
+            predicted_depth = outputs.predicted_depth
+            prediction = torch.nn.functional.interpolate(
+                predicted_depth.unsqueeze(1),
+                size=image.size[::-1],
+                mode="bicubic",
+                align_corners=False,
+            )
+
+        depth = prediction.squeeze().detach().float().cpu().numpy()
+        depth -= depth.min()
+        depth_max = float(depth.max())
+        if depth_max <= 1e-6:
+            return None
+
+        depth /= depth_max
+        depth_uint8 = np.clip(depth * 255.0, 0, 255).astype("uint8")
+        depth_image = Image.fromarray(depth_uint8, mode="L").convert("RGB")
+        return depth_image
+    except Exception:
+        return None
+
+
 def _load_refinement_pipeline():
     global _REFINEMENT_PIPELINE
     global _REFINEMENT_PIPELINE_LOAD_ERROR
+    global _REFINEMENT_PIPELINE_MODE
 
     if not IMAGE_REFINEMENT_ENABLED:
         return None
@@ -2273,14 +2449,34 @@ def _load_refinement_pipeline():
 
         try:
             import torch
-            from diffusers import StableDiffusionInpaintPipeline, StableDiffusionXLInpaintPipeline
+            from diffusers import (
+                ControlNetModel,
+                StableDiffusionInpaintPipeline,
+                StableDiffusionXLControlNetInpaintPipeline,
+                StableDiffusionXLInpaintPipeline,
+            )
 
             device = EFFECTIVE_DEVICE
             pipeline_kind = str(RUNTIME_CONFIG["pipeline_kind"])
             torch_dtype = _torch_dtype(torch, device)
 
             pipeline_kwargs: dict[str, Any] = {"torch_dtype": torch_dtype}
-            if pipeline_kind == "sdxl":
+            pipeline_mode = "inpaint"
+            if pipeline_kind == "sdxl" and _depth_refinement_available():
+                try:
+                    controlnet = ControlNetModel.from_pretrained(
+                        str(RUNTIME_CONFIG["depth_controlnet_model"]),
+                        torch_dtype=torch_dtype,
+                    )
+                    pipeline_cls = StableDiffusionXLControlNetInpaintPipeline
+                    pipeline_kwargs["controlnet"] = controlnet
+                    pipeline_kwargs["use_safetensors"] = True
+                    pipeline_mode = "depth-inpaint"
+                except Exception:
+                    pipeline_cls = StableDiffusionXLInpaintPipeline
+                    pipeline_kwargs["use_safetensors"] = True
+                    pipeline_mode = "inpaint"
+            elif pipeline_kind == "sdxl":
                 pipeline_cls = StableDiffusionXLInpaintPipeline
                 pipeline_kwargs["use_safetensors"] = True
             else:
@@ -2290,6 +2486,16 @@ def _load_refinement_pipeline():
                 str(RUNTIME_CONFIG["inpaint_model"]),
                 **pipeline_kwargs,
             )
+
+            if IP_ADAPTER_ENABLED and hasattr(pipeline, "load_ip_adapter"):
+                ip_adapter_subfolder = "sdxl_models" if pipeline_kind == "sdxl" else "models"
+                pipeline.load_ip_adapter(
+                    str(RUNTIME_CONFIG["ip_adapter_repo"]),
+                    subfolder=ip_adapter_subfolder,
+                    weight_name=str(RUNTIME_CONFIG["ip_adapter_weight"]),
+                )
+                if hasattr(pipeline, "set_ip_adapter_scale"):
+                    pipeline.set_ip_adapter_scale(_effective_refinement_ip_adapter_scale())
 
             if hasattr(pipeline, "enable_vae_slicing"):
                 pipeline.enable_vae_slicing()
@@ -2302,14 +2508,13 @@ def _load_refinement_pipeline():
                 pipeline = pipeline.to("cpu")
 
             _REFINEMENT_PIPELINE = pipeline
+            _REFINEMENT_PIPELINE_MODE = pipeline_mode
             _REFINEMENT_PIPELINE_LOAD_ERROR = None
             return pipeline
         except Exception as error:  # pragma: no cover - runtime path
             _REFINEMENT_PIPELINE_LOAD_ERROR = str(error)
-            raise HTTPException(
-                status_code=503,
-                detail=f"refinement_pipeline_init_failed: {_REFINEMENT_PIPELINE_LOAD_ERROR}",
-            ) from error
+            _REFINEMENT_PIPELINE_MODE = "disabled"
+            return None
 
 
 def _reset_scheduler(pipeline) -> None:
@@ -2353,6 +2558,8 @@ def health():
         "loaded": _PIPELINE is not None,
         "refinement_enabled": IMAGE_REFINEMENT_ENABLED,
         "refinement_loaded": IMAGE_REFINEMENT_ENABLED and _REFINEMENT_PIPELINE is not None,
+        "depth_refinement_enabled": _depth_refinement_available(),
+        "refinement_pipeline_mode": _REFINEMENT_PIPELINE_MODE,
         "profile": RUNTIME_CONFIG["profile"],
         "requested_device": RUNTIME_CONFIG["device"],
         "effective_device": EFFECTIVE_DEVICE,
@@ -2361,15 +2568,19 @@ def health():
         "base_model": RUNTIME_CONFIG["base_model"],
         "inpaint_model": RUNTIME_CONFIG["inpaint_model"],
         "controlnet_model": RUNTIME_CONFIG["controlnet_model"],
+        "depth_controlnet_model": RUNTIME_CONFIG["depth_controlnet_model"],
+        "depth_estimator_model": RUNTIME_CONFIG["depth_estimator_model"],
         "ip_adapter_repo": RUNTIME_CONFIG["ip_adapter_repo"],
         "ip_adapter_weight": RUNTIME_CONFIG["ip_adapter_weight"],
         "steps": RUNTIME_CONFIG["steps"],
         "guidance_scale": RUNTIME_CONFIG["guidance_scale"],
         "control_scale": RUNTIME_CONFIG["control_scale"],
         "ip_scale": RUNTIME_CONFIG["ip_scale"],
+        "refinement_control_scale": RUNTIME_CONFIG["refinement_control_scale"],
+        "refinement_ip_scale": RUNTIME_CONFIG["refinement_ip_scale"],
         "ip_adapter_enabled": IP_ADAPTER_ENABLED,
         "device_fallback_reason": DEVICE_FALLBACK_REASON,
-        "last_error": _LAST_RUNTIME_ERROR or _PIPELINE_LOAD_ERROR or refinement_error,
+        "last_error": _LAST_RUNTIME_ERROR or _PIPELINE_LOAD_ERROR or refinement_error or _DEPTH_ESTIMATOR_LOAD_ERROR,
     }
 
 
@@ -2450,10 +2661,10 @@ def generate(payload: GenerateRequest, authorization: Optional[str] = Header(def
     def run_variant(kind: Literal["representative", "lifestyle"], index: int, prompt_variant: PromptVariantPayload):
         width, height = _target_size(prompt_variant.aspect_ratio)
         control_image = _make_blank_condition((width, height))
-        style_image = _make_style_only_reference(
-            style_reference_images[(index + payload.regenerate_count) % len(style_reference_images)],
-            (width, height),
-        )
+        selected_style_reference = style_reference_images[
+            (index + payload.regenerate_count) % len(style_reference_images)
+        ]
+        style_image = _make_style_only_reference(selected_style_reference, (width, height))
         background_only_prompt = ", ".join(
             [
                 prompt_variant.prompt,
@@ -2507,6 +2718,7 @@ def generate(payload: GenerateRequest, authorization: Optional[str] = Header(def
                     product_image=selected_product_image,
                     kind=kind,
                     product=payload.product,
+                    style_reference_image=selected_style_reference,
                 )
         except Exception as error:  # pragma: no cover - runtime path
             _LAST_RUNTIME_ERROR = str(error)
