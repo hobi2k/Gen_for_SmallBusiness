@@ -33,6 +33,7 @@
 - 스타일 선택 이벤트 저장
 - 스마트스토어용 텍스트 패키지 생성
 - Python 이미지 워커를 통한 배경 생성
+- 스타일 전용 레퍼런스 전처리 + 조건부 ROI refinement 지원
 - 상품 누끼 추출 및 테이블 위 배치
 - 실측 사이즈 기반 스케일 보정
 - `대표 1장 + 보조 최대 2장` 멀티뷰 입력 지원
@@ -141,22 +142,29 @@
    - 실패 시 휴리스틱 누끼 fallback
 3. 테이블/식탁 후보 영역 탐색
 4. 상품군별 배치 보정
-   - `flat`: 트레이/접시/볼
-   - `upright`: 컵/유리잔
+   - `flat`: 트레이/접시 등 평면형
+   - `upright`: 컵/유리잔/볼 등 용기형
    - `linear`: 커트러리
 5. 실측 사이즈 기반 스케일 보정
 6. 조도/색온도/그림자 보정 후 합성
+7. 조건 충족 시 ROI 한정 refinement
+   - `full + CUDA`에서만 활성 후보
+   - `IP-Adapter + depth + conditional inpaint` 조합
 
 현재 목적:
 
 - 배경은 `주방/다이닝 공간`으로 고정
 - 테이블 또는 식탁이 반드시 보이는 장면 생성
+- 보이는 테이블은 비어 있고 동일 종류 소품은 배경에 생성되지 않도록 제약
+- 상품은 배경에 정확히 1개만 들어가도록 제약
 - 상품은 공중에 뜨지 않고 테이블 위에 놓인 것처럼 배치
 - 같은 상품이 배경에 한 번 더 생성되는 문제 최소화
 
 ### 스타일 레퍼런스 사용 방식
 
 `references/themes/*` 이미지는 런타임에 “공간 구조”가 아니라 “스타일”을 더 참고하도록 조정되어 있습니다.
+
+현재 worker는 reference 이미지를 blur/pixelate/posterize 기반의 style-only 카드로 약화해 사용합니다.
 
 - 색감
 - 재질감
@@ -176,11 +184,13 @@
 
 멀티뷰가 있는 경우 worker는 대표 이미지와 보조 이미지들 중에서 실제 배치에 쓸 뷰를 선택합니다.
 
-- `flat`: 탑뷰/평행도/상면 비율이 좋은 이미지 선호
+- `flat`: 탑뷰/평행도/상면 비율이 좋은 이미지 선호, 대각선 각도 뷰는 감점
 - `upright`: 정면 비율이 자연스러운 이미지 선호
 - `linear`: 긴 축이 잘 드러나는 이미지 선호
 
 보조 이미지가 없으면 대표 이미지 1장만 그대로 사용합니다.
+
+배치 단계에서는 `flat` 상품이 하단 foreground tabletop 위에 놓이도록 후보 면을 더 보수적으로 고릅니다.
 
 ## 현재 이미지 워커 상태
 
@@ -189,14 +199,17 @@
 - `full`
   - 원격 GPU용
   - `SDXL + IP-Adapter`
+  - `IMAGE_REFINEMENT_ENABLED=true`일 때 조건부 ROI refinement 사용
+  - `IMAGE_DEPTH_REFINEMENT_ENABLED=true`이고 `CUDA`일 때 `depth + inpaint` 경로 사용 가능
 - `lite-mps`
   - 로컬 Apple Silicon 확인용
   - `Stable Diffusion 1.5 + IP-Adapter`
 
 참고:
 
-- 코드에는 ControlNet 설정이 남아 있지만, 현재 실제 배경 생성은 blank condition 기반이라 구조 제어를 강하게 쓰지 않습니다.
-- 2-stage refinement(inpaint)는 구현돼 있지만, 최근 latency/fallback 이슈 때문에 기본값은 `off`입니다.
+- 배경 생성 자체는 여전히 blank condition 기반이라 구조 제어를 강하게 쓰지 않습니다.
+- refinement는 전체 프레임이 아니라 ROI 한정으로만 시도합니다.
+- refinement는 구현돼 있지만 안정성 우선으로 기본값은 `off`이며, 조건이 맞지 않으면 자동으로 skip됩니다.
 
 ## 고정 스타일 프리셋
 
@@ -295,6 +308,7 @@
   -> tabletop candidate selection
   -> size-aware placement
   -> lighting/shadow harmonization
+  -> conditional ROI refinement (optional depth + inpaint on full/cuda)
 
 [Storage]
   -> storage/uploads/*
@@ -424,6 +438,8 @@ npm run dev:3014
 
 이 스크립트는 `.next`를 정리한 뒤 `3014` 포트로 dev 서버를 띄웁니다.
 
+현재 구조는 `Next.js 앱은 로컬에서 실행`하고, 이미지 생성만 `IMAGE_WORKER_URL`을 통해 로컬 또는 원격 Python worker로 위임하는 형태입니다.
+
 ### 3. 타입 검사
 
 ```bash
@@ -447,7 +463,11 @@ export IMAGE_WORKER_PROFILE=full
 export IMAGE_WORKER_DEVICE=cuda
 export IMAGE_WORKER_PORT=8080
 export IMAGE_WORKER_TOKEN='YOUR_TOKEN'
-export IMAGE_REFINEMENT_ENABLED=false
+export IMAGE_WORKER_TIMEOUT_MS=100000
+export IMAGE_REFINEMENT_ENABLED=true
+export IMAGE_DEPTH_REFINEMENT_ENABLED=true
+export IMAGE_REFINEMENT_DEPTH_CONTROL_SCALE=0.48
+export IMAGE_REFINEMENT_IP_ADAPTER_SCALE=0.26
 uvicorn workers.image_worker.app:app --host 127.0.0.1 --port 8080
 ```
 
@@ -455,7 +475,13 @@ health 확인:
 
 ```bash
 curl http://127.0.0.1:8080/health
-curl http://127.0.0.1/health
+```
+
+보다 보수적으로 운영하려면 아래 두 값을 모두 `false`로 두고 비교할 수 있습니다.
+
+```bash
+export IMAGE_REFINEMENT_ENABLED=false
+export IMAGE_DEPTH_REFINEMENT_ENABLED=false
 ```
 
 ## 주요 환경 변수
@@ -468,14 +494,19 @@ curl http://127.0.0.1/health
 - `IMAGE_WORKER_PROFILE`
 - `IMAGE_WORKER_DEVICE`
 - `IMAGE_REFINEMENT_ENABLED`
+- `IMAGE_DEPTH_REFINEMENT_ENABLED`
 - `IMAGE_MODEL_BASE`
 - `IMAGE_MODEL_CONTROLNET`
+- `IMAGE_MODEL_DEPTH_CONTROLNET`
+- `IMAGE_MODEL_DEPTH_ESTIMATOR`
 - `IMAGE_MODEL_IP_ADAPTER_REPO`
 - `IMAGE_MODEL_IP_ADAPTER_WEIGHT`
 - `IMAGE_NUM_INFERENCE_STEPS`
 - `IMAGE_GUIDANCE_SCALE`
 - `IMAGE_CONTROLNET_SCALE`
 - `IMAGE_IP_ADAPTER_SCALE`
+- `IMAGE_REFINEMENT_DEPTH_CONTROL_SCALE`
+- `IMAGE_REFINEMENT_IP_ADAPTER_SCALE`
 
 자세한 기본값은 [.env.example](/Users/apple/Lifestyle_Shop/.env.example)에 있습니다.
 
@@ -483,7 +514,9 @@ curl http://127.0.0.1/health
 
 - 상품은 아직 “완전한 재생성”이 아니라 “배경 생성 + 상품 합성” 하이브리드입니다.
 - 상품 위치, 원근, 스케일은 계속 개선 중이며 모든 카테고리에서 완벽하지 않습니다.
-- 2-stage refinement는 품질은 좋아질 수 있지만 latency가 크게 늘어 기본값은 꺼져 있습니다.
+- refinement는 품질 개선용 보조 단계이며 `full + CUDA`에서만 depth 경로가 유효합니다.
+- refinement는 조건이 맞을 때만 ROI 단위로 시도하며, 시간이 부족하거나 로드에 실패하면 skip 또는 기본 합성 경로로 복귀합니다.
+- non-lite worker timeout 기본값은 현재 `100000ms`입니다.
 - 레퍼런스는 스타일 전용으로 약화해서 쓰지만, 특정 테마에서는 공간 정보가 일부 남을 수 있습니다.
 - 공개된 worker는 봇 스캔 트래픽을 받을 수 있으므로 Nginx 제한 설정을 권장합니다.
 
