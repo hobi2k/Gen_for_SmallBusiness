@@ -56,7 +56,7 @@ function productPlacementDirective(product: ProductAnalysis): string {
     .toLowerCase();
 
   if (/(tray|쟁반|트레이|plate|접시)/.test(descriptor)) {
-    return "empty kitchen or dining tabletop seen clearly from a gentle top-front angle, broad flat placement zone reserved in the lower foreground, object intended to rest fully on the table surface, no props or furniture inside that reserved zone";
+    return "empty kitchen or dining tabletop seen clearly from a gentle top-front angle, broad flat placement zone reserved in the lower foreground, object intended to rest fully on the table surface, product plane aligned parallel to the table edge, no props or furniture inside that reserved zone";
   }
 
   if (/(bowl|볼)/.test(descriptor)) {
@@ -215,12 +215,31 @@ function productCategoryTokens(product: ProductAnalysis): string[] {
 
 function filteredAccentProps(style: StylePreset, product: ProductAnalysis): string[] {
   const blockedTokens = productCategoryTokens(product);
+  const descriptor = [
+    product.category,
+    product.categoryLabel,
+    product.visualSummary,
+    product.materialNotes,
+    product.detectedTags.join(" ")
+  ]
+    .join(" ")
+    .toLowerCase();
+  const isFlatOrUprightTableware = /(tray|쟁반|트레이|plate|접시|bowl|볼|cup|glass|glassware|컵|유리잔)/.test(
+    descriptor
+  );
   if (!blockedTokens.length) {
-    return style.sceneProfile.accentProps;
+    return isFlatOrUprightTableware
+      ? style.sceneProfile.accentProps.filter(
+          (prop) => !/(tray|plate|bowl|cup|mug|glass|dish|serving|tea utensil|ceramic bowl|pastry plate)/i.test(prop)
+        )
+      : style.sceneProfile.accentProps;
   }
 
   return style.sceneProfile.accentProps.filter((prop) => {
     const normalized = prop.toLowerCase();
+    if (isFlatOrUprightTableware && /(tray|plate|bowl|cup|mug|glass|dish|serving|tea utensil|ceramic bowl|pastry plate)/i.test(normalized)) {
+      return false;
+    }
     return !blockedTokens.some((token) => normalized.includes(token));
   });
 }
@@ -252,6 +271,13 @@ function productNegativeTerms(product: ProductAnalysis): string[] {
     `second ${categoryToken}`,
     `extra ${categoryToken}`,
     `duplicate foreground ${categoryToken}`,
+    `${categoryToken} in background`,
+    `${categoryToken} on shelf`,
+    `${categoryToken} on another table`,
+    `overlapping ${categoryToken}`,
+    `cropped ${categoryToken}`,
+    `floating ${categoryToken}`,
+    `diagonal ${categoryToken}`,
     ...colorTerms.map((color) => `${color} ${categoryToken}`),
     ...materialTerms.map((material) => `${material} ${categoryToken}`)
   ];
@@ -302,9 +328,11 @@ function buildRepresentativePrompt(style: StylePreset, product: ProductAnalysis)
     "reserved product placement zone on the tabletop must stay empty",
     "tabletop dominates the lower half of the frame",
     "camera height aligned to the tabletop, not the whole room",
+    "only one clean empty placement zone on the visible table",
     "single setup only",
     "do not render the product itself",
     "no duplicate object",
+    "no same-category object anywhere else in the frame",
     "no chairs, tableware, flowers, lamps, or decor inside the reserved product zone",
     "camera focused on the table surface, not the room",
     "centered composition",
@@ -336,6 +364,7 @@ function buildLifestylePrompt(style: StylePreset, product: ProductAnalysis): str
     "kitchen or dining table is the hero surface",
     "do not render the product itself",
     "no duplicate object",
+    "no same-category object anywhere else in the frame",
     "no cups, plates, bowls, trays, flowers, or decor inside the reserved product zone",
     "natural dining-table perspective",
     "props secondary",

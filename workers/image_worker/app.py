@@ -902,7 +902,7 @@ def _target_surface_width_factor(
     kind: Literal["representative", "lifestyle"],
 ) -> float:
     if profile == "flat":
-        return 0.4 if kind == "representative" else 0.34
+        return 0.32 if kind == "representative" else 0.28
     if profile == "upright":
         return 0.18 if kind == "representative" else 0.14
     if profile == "linear":
@@ -1014,9 +1014,13 @@ def _select_placement_region(
         candidate_width = int(candidate["right"] - candidate["left"])
         surface_target_width = max(120, int(candidate_width * surface_factor))
         lower_bias = min(1.0, max(0.0, (candidate["y"] / max(scene_height, 1) - 0.54) / 0.3))
-        depth_scale = 0.74 + lower_bias * 0.24
+        depth_scale = (
+            0.64 + lower_bias * 0.18
+            if profile == "flat"
+            else 0.74 + lower_bias * 0.24
+        )
         target_width = min(
-            int(candidate_width * 0.72),
+            int(candidate_width * (0.56 if profile == "flat" else 0.72)),
             int(max(base_target_width, surface_target_width) * depth_scale),
         )
         target_height = max(110, int(target_width * cutout_aspect))
@@ -1032,8 +1036,19 @@ def _select_placement_region(
         if end_x < start_x:
             continue
 
-        step = max(12, int(target_width * 0.18))
-        for center_x in range(start_x, end_x + 1, step):
+        if profile == "flat":
+            candidate_center = int(candidate["x"])
+            spread = max(18, int(candidate_width * 0.08))
+            center_positions = [
+                max(start_x, min(end_x, candidate_center)),
+                max(start_x, min(end_x, candidate_center - spread)),
+                max(start_x, min(end_x, candidate_center + spread)),
+            ]
+        else:
+            step = max(12, int(target_width * 0.18))
+            center_positions = list(range(start_x, end_x + 1, step))
+
+        for center_x in center_positions:
             product_x = center_x - target_width // 2
             product_y = int(candidate["y"] - target_height - contact_lift)
             scan_rect = (
@@ -1064,7 +1079,7 @@ def _select_placement_region(
             if profile == "upright":
                 score += 0.05 * center_bias
             elif profile == "flat":
-                score += 0.04 * width_bias
+                score += 0.08 * width_bias + 0.06 * center_bias + 0.04 * lower_bias
 
             if score > best_score:
                 best_score = score
@@ -1120,6 +1135,44 @@ def _taper_object_horizontally(image, *, top_scale: float, bottom_scale: float):
     return _alpha_crop(output)
 
 
+def _estimate_cutout_orientation_degrees(image) -> float:
+    import cv2
+    import numpy as np
+
+    alpha = np.array(image.getchannel("A"))
+    ys, xs = np.where(alpha > 24)
+    if xs.size < 16 or ys.size < 16:
+        return 0.0
+
+    points = np.column_stack((xs, ys)).astype("float32")
+    rect = cv2.minAreaRect(points)
+    box = cv2.boxPoints(rect)
+
+    longest_dx = 0.0
+    longest_dy = 0.0
+    longest_length = 0.0
+    for index in range(4):
+        x1, y1 = box[index]
+        x2, y2 = box[(index + 1) % 4]
+        dx = float(x2 - x1)
+        dy = float(y2 - y1)
+        length = float((dx * dx + dy * dy) ** 0.5)
+        if length > longest_length:
+            longest_length = length
+            longest_dx = dx
+            longest_dy = dy
+
+    if longest_length <= 1e-6:
+        return 0.0
+
+    angle = float(np.degrees(np.arctan2(longest_dy, longest_dx)))
+    while angle <= -90:
+        angle += 180
+    while angle > 90:
+        angle -= 180
+    return angle
+
+
 def _apply_scene_geometry(
     cutout,
     *,
@@ -1133,14 +1186,25 @@ def _apply_scene_geometry(
     profile = _placement_profile(product)
 
     if profile == "flat":
+        source_angle = _estimate_cutout_orientation_degrees(adjusted)
+        normalization_rotation = max(-32.0, min(32.0, -source_angle))
+        if abs(normalization_rotation) >= 0.35:
+            adjusted = adjusted.rotate(
+                normalization_rotation,
+                resample=Image.Resampling.BICUBIC,
+                expand=True,
+                fillcolor=(0, 0, 0, 0),
+            )
+            adjusted = _alpha_crop(adjusted)
+
         width, height = adjusted.size
-        flatten_ratio = 0.82 if kind == "representative" else 0.72
+        flatten_ratio = 0.8 if kind == "representative" else 0.7
         adjusted = adjusted.resize((width, max(1, int(height * flatten_ratio))), Image.Resampling.LANCZOS)
-        taper_strength = 0.08 if kind == "representative" else 0.14
+        taper_strength = 0.12 if kind == "representative" else 0.18
         adjusted = _taper_object_horizontally(
             adjusted,
-            top_scale=max(0.72, 1.0 - taper_strength - min(0.04, abs(angle) / 120)),
-            bottom_scale=min(1.08, 1.0 + taper_strength * 0.12),
+            top_scale=max(0.78, 1.0 - taper_strength - min(0.03, abs(angle) / 140)),
+            bottom_scale=min(1.04, 1.0 + taper_strength * 0.06),
         )
 
     elif profile == "upright":
@@ -1175,9 +1239,11 @@ def _apply_scene_geometry(
         )
         adjusted = _alpha_crop(adjusted)
 
-    rotation_limit = 1.2 if profile == "flat" else 2.4 if profile == "upright" else 4.0
-    rotation_factor = 0.08 if profile == "flat" else 0.14 if profile == "upright" else 0.22
+    rotation_limit = 6.0 if profile == "flat" else 2.4 if profile == "upright" else 4.0
+    rotation_factor = 0.86 if profile == "flat" else 0.14 if profile == "upright" else 0.22
     rotation = max(-rotation_limit, min(rotation_limit, angle * (rotation_factor if kind == "lifestyle" else 0.1)))
+    if profile == "flat" and kind == "representative":
+        rotation = max(-rotation_limit, min(rotation_limit, angle * 0.74))
     if abs(rotation) >= 0.2:
         adjusted = adjusted.rotate(
             rotation,
@@ -1754,6 +1820,7 @@ def _product_negative_terms(product: ProductPayload) -> str:
     material_terms = [term for term in product.material_hints if term and term != "none"]
     summary = (product.visual_summary or "").strip().lower()
     material_notes = (product.material_notes or "").strip().lower()
+    profile = _placement_profile(product)
 
     terms = [
         "duplicate product",
@@ -1764,7 +1831,31 @@ def _product_negative_terms(product: ProductPayload) -> str:
         f"duplicate foreground {category_token}",
         f"same {category_token} as foreground",
         f"same {category_label}",
+        f"{category_token} in background",
+        f"{category_token} on shelf",
+        f"{category_token} on another table",
+        f"overlapping {category_token}",
+        f"floating {category_token}",
+        f"cropped {category_token}",
     ]
+
+    if profile == "flat":
+        terms.extend(
+            [
+                f"tilted {category_token}",
+                f"diagonal {category_token}",
+                f"{category_token} leaning upright",
+                f"{category_token} standing vertically",
+            ]
+        )
+
+    if profile == "upright":
+        terms.extend(
+            [
+                f"two {category_token}s",
+                f"cluster of {category_token}",
+            ]
+        )
 
     if color_terms:
         terms.extend(f"{color} {category_token}" for color in color_terms[:2])
