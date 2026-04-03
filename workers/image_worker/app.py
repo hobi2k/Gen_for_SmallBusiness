@@ -1209,12 +1209,32 @@ def _max_surface_center_offset_ratio(
     kind: Literal["representative", "lifestyle"],
 ) -> float:
     if profile == "flat":
-        return 0.22 if kind == "representative" else 0.18
+        return 0.28 if kind == "representative" else 0.24
     if profile == "upright":
         return 0.3 if kind == "representative" else 0.26
     if profile == "linear":
         return 0.28 if kind == "representative" else 0.24
     return 0.32 if kind == "representative" else 0.28
+
+
+def _surface_filter_limits(
+    *,
+    profile: Literal["flat", "upright", "linear", "generic"],
+    kind: Literal["representative", "lifestyle"],
+    relaxed: bool,
+) -> tuple[float, float]:
+    min_y_ratio = _min_surface_y_ratio(profile=profile, kind=kind)
+    max_center_offset_ratio = _max_surface_center_offset_ratio(profile=profile, kind=kind)
+    if not relaxed:
+        return min_y_ratio, max_center_offset_ratio
+
+    if profile == "flat":
+        return max(0.56, min_y_ratio - 0.08), min(0.38, max_center_offset_ratio + 0.1)
+    if profile == "upright":
+        return max(0.54, min_y_ratio - 0.06), min(0.38, max_center_offset_ratio + 0.08)
+    if profile == "linear":
+        return max(0.56, min_y_ratio - 0.06), min(0.36, max_center_offset_ratio + 0.06)
+    return max(0.54, min_y_ratio - 0.05), min(0.4, max_center_offset_ratio + 0.08)
 
 
 def _score_empty_surface(
@@ -1313,113 +1333,122 @@ def _select_placement_region(
     luminance = cv2.cvtColor(array, cv2.COLOR_RGB2GRAY)
     edge_map = cv2.Canny(cv2.GaussianBlur(luminance, (5, 5), 0), 55, 145)
 
-    best_region: Optional[dict[str, float]] = None
-    best_score = -10.0
     max_candidate_score = max(candidate["score"] for candidate in candidates)
 
-    for candidate in candidates:
-        candidate_y_ratio = candidate["y"] / max(scene_height, 1)
-        candidate_center_offset = abs(candidate["x"] / max(scene_width, 1) - 0.5)
-        if candidate_y_ratio < _min_surface_y_ratio(profile=profile, kind=kind):
-            continue
-        if candidate_center_offset > _max_surface_center_offset_ratio(profile=profile, kind=kind):
-            continue
-
-        candidate_width = int(candidate["right"] - candidate["left"])
-        side_margin = int(candidate_width * _surface_side_margin_ratio(profile))
-        usable_left = max(0, int(candidate["left"]) + side_margin)
-        usable_right = min(scene_width, int(candidate["right"]) - side_margin)
-        usable_width = usable_right - usable_left
-        if usable_width < 120:
-            continue
-
-        surface_target_width = max(104, int(usable_width * surface_factor))
-        max_surface_width = max(
-            110,
-            int(usable_width * _max_surface_occupancy(profile=profile, kind=kind)),
+    for relaxed in (False, True):
+        best_region: Optional[dict[str, float]] = None
+        best_score = -10.0
+        min_y_ratio, max_center_offset_ratio = _surface_filter_limits(
+            profile=profile,
+            kind=kind,
+            relaxed=relaxed,
         )
-        lower_bias = min(1.0, max(0.0, (candidate["y"] / max(scene_height, 1) - 0.54) / 0.3))
-        depth_scale = (
-            0.58 + lower_bias * 0.14
-            if profile == "flat"
-            else 0.68 + lower_bias * 0.18
-        )
-        target_width = min(max_surface_width, int(max(base_target_width, surface_target_width) * depth_scale))
-        target_height = max(110, int(target_width * cutout_aspect))
-        free_height = int(candidate["y"] - candidate["top"])
-        if free_height > 0 and target_height > int(free_height * 0.86):
-            shrink = int(free_height * 0.86)
-            target_height = max(90, shrink)
-            target_width = max(110, int(target_height / max(cutout_aspect, 1e-6)))
 
-        contact_lift = max(1, int(target_height * (0.006 if profile == "flat" else 0.016)))
-        start_x = int(usable_left + target_width / 2)
-        end_x = int(usable_right - target_width / 2)
-        if end_x < start_x:
-            continue
-
-        if profile == "flat":
-            candidate_center = int(min(max(candidate["x"], start_x), end_x))
-            spread = max(18, int(candidate_width * 0.08))
-            center_positions = [
-                max(start_x, min(end_x, candidate_center)),
-                max(start_x, min(end_x, candidate_center - spread)),
-                max(start_x, min(end_x, candidate_center + spread)),
-            ]
-        else:
-            step = max(12, int(target_width * 0.18))
-            center_positions = list(range(start_x, end_x + 1, step))
-
-        for center_x in center_positions:
-            product_x = center_x - target_width // 2
-            product_y = int(candidate["y"] - target_height - contact_lift)
-            scan_rect = (
-                product_x - int(target_width * 0.08),
-                product_y - int(target_height * 0.06),
-                product_x + int(target_width * 1.08),
-                product_y + int(target_height * 1.02),
-            )
-            empty_score = _score_empty_surface(
-                edge_map=edge_map,
-                luminance_map=luminance,
-                rect=scan_rect,
-            )
-            if empty_score < 0:
+        for candidate in candidates:
+            candidate_y_ratio = candidate["y"] / max(scene_height, 1)
+            candidate_center_offset = abs(candidate["x"] / max(scene_width, 1) - 0.5)
+            if candidate_y_ratio < min_y_ratio:
+                continue
+            if candidate_center_offset > max_center_offset_ratio:
                 continue
 
-            center_bias = 1 - abs((center_x / max(scene_width, 1)) - 0.5)
-            candidate_strength = candidate["score"] / max(max_candidate_score, 1e-6)
-            width_bias = min(1.0, candidate_width / max(scene_width * 0.42, 1))
-            score = (
-                empty_score * 0.42
-                + candidate_strength * 0.26
-                + lower_bias * 0.14
-                + center_bias * 0.1
-                + width_bias * 0.08
+            candidate_width = int(candidate["right"] - candidate["left"])
+            side_margin = int(candidate_width * _surface_side_margin_ratio(profile))
+            usable_left = max(0, int(candidate["left"]) + side_margin)
+            usable_right = min(scene_width, int(candidate["right"]) - side_margin)
+            usable_width = usable_right - usable_left
+            if usable_width < 120:
+                continue
+
+            surface_target_width = max(104, int(usable_width * surface_factor))
+            max_surface_width = max(
+                110,
+                int(usable_width * _max_surface_occupancy(profile=profile, kind=kind)),
             )
+            lower_bias = min(1.0, max(0.0, (candidate["y"] / max(scene_height, 1) - 0.54) / 0.3))
+            depth_scale = (
+                0.58 + lower_bias * 0.14
+                if profile == "flat"
+                else 0.68 + lower_bias * 0.18
+            )
+            target_width = min(max_surface_width, int(max(base_target_width, surface_target_width) * depth_scale))
+            target_height = max(110, int(target_width * cutout_aspect))
+            free_height = int(candidate["y"] - candidate["top"])
+            if free_height > 0 and target_height > int(free_height * 0.86):
+                shrink = int(free_height * 0.86)
+                target_height = max(90, shrink)
+                target_width = max(110, int(target_height / max(cutout_aspect, 1e-6)))
 
-            if profile == "upright":
-                score += 0.05 * center_bias
-            elif profile == "flat":
-                score += 0.08 * width_bias + 0.06 * center_bias + 0.04 * lower_bias
+            contact_lift = max(1, int(target_height * (0.006 if profile == "flat" else 0.016)))
+            start_x = int(usable_left + target_width / 2)
+            end_x = int(usable_right - target_width / 2)
+            if end_x < start_x:
+                continue
 
-            if score > best_score:
-                best_score = score
-                best_region = {
-                    "center_x": float(center_x),
-                    "bottom_y": float(candidate["y"]),
-                    "target_width": float(target_width),
-                    "target_height": float(target_height),
-                    "angle": float(candidate["angle"]),
-                    "confidence": float(score),
-                    "surface_left": float(usable_left),
-                    "surface_right": float(usable_right),
-                    "surface_top": float(candidate["top"]),
-                    "surface_bottom": float(candidate["bottom"]),
-                }
+            if profile == "flat":
+                candidate_center = int(min(max(candidate["x"], start_x), end_x))
+                spread = max(18, int(candidate_width * 0.08))
+                center_positions = [
+                    max(start_x, min(end_x, candidate_center)),
+                    max(start_x, min(end_x, candidate_center - spread)),
+                    max(start_x, min(end_x, candidate_center + spread)),
+                ]
+            else:
+                step = max(12, int(target_width * 0.18))
+                center_positions = list(range(start_x, end_x + 1, step))
 
-    if best_region is not None:
-        return best_region
+            for center_x in center_positions:
+                product_x = center_x - target_width // 2
+                product_y = int(candidate["y"] - target_height - contact_lift)
+                scan_rect = (
+                    product_x - int(target_width * 0.08),
+                    product_y - int(target_height * 0.06),
+                    product_x + int(target_width * 1.08),
+                    product_y + int(target_height * 1.02),
+                )
+                empty_score = _score_empty_surface(
+                    edge_map=edge_map,
+                    luminance_map=luminance,
+                    rect=scan_rect,
+                )
+                if empty_score < 0:
+                    continue
+
+                center_bias = 1 - abs((center_x / max(scene_width, 1)) - 0.5)
+                candidate_strength = candidate["score"] / max(max_candidate_score, 1e-6)
+                width_bias = min(1.0, candidate_width / max(scene_width * 0.42, 1))
+                score = (
+                    empty_score * 0.42
+                    + candidate_strength * 0.26
+                    + lower_bias * 0.14
+                    + center_bias * 0.1
+                    + width_bias * 0.08
+                )
+
+                if profile == "upright":
+                    score += 0.05 * center_bias
+                elif profile == "flat":
+                    score += 0.08 * width_bias + 0.06 * center_bias + 0.04 * lower_bias
+                    if relaxed:
+                        score -= 0.04
+
+                if score > best_score:
+                    best_score = score
+                    best_region = {
+                        "center_x": float(center_x),
+                        "bottom_y": float(candidate["y"]),
+                        "target_width": float(target_width),
+                        "target_height": float(target_height),
+                        "angle": float(candidate["angle"]),
+                        "confidence": float(score),
+                        "surface_left": float(usable_left),
+                        "surface_right": float(usable_right),
+                        "surface_top": float(candidate["top"]),
+                        "surface_bottom": float(candidate["bottom"]),
+                    }
+
+        if best_region is not None:
+            return best_region
 
     base_height = max(120, int(base_target_width * cutout_aspect))
     return _fallback_placement_region(
@@ -1788,7 +1817,7 @@ def _clear_reserved_zone_conflicts(
         return scene_rgba
 
     roi = scene_rgba.crop(zone_box)
-    blur_radius = max(16, int(target_width * (0.075 if profile == "flat" else 0.06)))
+    blur_radius = max(12, int(target_width * (0.05 if profile == "flat" else 0.06)))
     softened = roi.filter(ImageFilter.GaussianBlur(radius=blur_radius))
 
     sample_strip = roi.crop(
@@ -1803,7 +1832,7 @@ def _clear_reserved_zone_conflicts(
         int(channel)
         for channel in sample_strip.resize((1, 1), Image.Resampling.BILINEAR).getpixel((0, 0))
     )
-    tint_strength = 0.32 if profile == "flat" else 0.22
+    tint_strength = 0.18 if profile == "flat" else 0.22
     tint_layer = Image.new("RGBA", roi.size, (*mean_color, 255))
     softened = Image.blend(softened, tint_layer, tint_strength)
 
@@ -2091,19 +2120,20 @@ def _compose_identity_locked_image(
         product=product,
     )
 
-    duplicate_cleanup_layer = Image.new("RGBA", scene.size, (0, 0, 0, 0))
-    duplicate_cleanup_mask = Image.new("L", scene.size, 0)
-    cleanup_alpha = resized_cutout.getchannel("A")
-    cleanup_alpha = cleanup_alpha.filter(ImageFilter.GaussianBlur(radius=max(10, int(target_width * 0.03))))
-    cleanup_alpha = cleanup_alpha.point(lambda p: 255 if p > 18 else 0)
-    cleanup_alpha = cleanup_alpha.filter(ImageFilter.MaxFilter(size=17))
-    cleanup_alpha = cleanup_alpha.filter(ImageFilter.GaussianBlur(radius=max(18, int(target_width * 0.06))))
-    duplicate_cleanup_mask.paste(cleanup_alpha, (product_x, product_y))
+    if profile != "flat":
+        duplicate_cleanup_layer = Image.new("RGBA", scene.size, (0, 0, 0, 0))
+        duplicate_cleanup_mask = Image.new("L", scene.size, 0)
+        cleanup_alpha = resized_cutout.getchannel("A")
+        cleanup_alpha = cleanup_alpha.filter(ImageFilter.GaussianBlur(radius=max(10, int(target_width * 0.03))))
+        cleanup_alpha = cleanup_alpha.point(lambda p: 255 if p > 18 else 0)
+        cleanup_alpha = cleanup_alpha.filter(ImageFilter.MaxFilter(size=17))
+        cleanup_alpha = cleanup_alpha.filter(ImageFilter.GaussianBlur(radius=max(18, int(target_width * 0.06))))
+        duplicate_cleanup_mask.paste(cleanup_alpha, (product_x, product_y))
 
-    scene_rgb = scene.convert("RGB")
-    blurred_scene = scene_rgb.filter(ImageFilter.GaussianBlur(radius=max(16, int(target_width * 0.06)))).convert("RGBA")
-    duplicate_cleanup_layer.paste(blurred_scene, (0, 0), duplicate_cleanup_mask)
-    scene = Image.alpha_composite(scene, duplicate_cleanup_layer)
+        scene_rgb = scene.convert("RGB")
+        blurred_scene = scene_rgb.filter(ImageFilter.GaussianBlur(radius=max(16, int(target_width * 0.06)))).convert("RGBA")
+        duplicate_cleanup_layer.paste(blurred_scene, (0, 0), duplicate_cleanup_mask)
+        scene = Image.alpha_composite(scene, duplicate_cleanup_layer)
 
     shadow_layer = Image.new("RGBA", scene.size, (0, 0, 0, 0))
     alpha = resized_cutout.getchannel("A")

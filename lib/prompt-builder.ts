@@ -137,11 +137,63 @@ function backgroundObjectBanDirective(product: ProductAnalysis): string {
   return `ban these objects anywhere in frame: ${backgroundObjectBanTerms(product).join(", ")}`;
 }
 
+function isTabletopProduct(product: ProductAnalysis): boolean {
+  const descriptor = [
+    product.category,
+    product.categoryLabel,
+    product.visualSummary,
+    product.materialNotes,
+    product.detectedTags.join(" ")
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  return /(tray|쟁반|트레이|plate|접시|platter|bowl|볼|cup|glass|glassware|mug|컵|유리잔|머그|cutlery|fork|knife|spoon|커트러리|포크|나이프|수저)/.test(
+    descriptor
+  );
+}
+
+function filterStyleCueText(text: string, product: ProductAnalysis): string {
+  if (!isTabletopProduct(product)) {
+    return text;
+  }
+
+  const filtered = text
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter(
+      (part) =>
+        !/(table setting|tablescape|plating|dessert|pastry|coffee|dripper|mug|cup|plate|bowl|tray|dish|glass|glassware|tea utensil|ceramic bowl|placemat|runner|napkin|cutlery|utensil|serving|simple ceramics)/i.test(
+          part
+        )
+    );
+
+  return filtered.join(", ") || "clean cabinetry, restrained lighting, subtle wall texture";
+}
+
+function filteredStyleKeywords(style: StylePreset, product: ProductAnalysis): string[] {
+  if (!isTabletopProduct(product)) {
+    return style.promptKeywords;
+  }
+
+  const filtered = style.promptKeywords.filter(
+    (keyword) =>
+      !/(table setting|tablescape|plating|dessert|pastry|coffee|cup|plate|bowl|tray|dish|glass|glassware|serving|classic props)/i.test(
+        keyword
+      )
+  );
+
+  return filtered.length
+    ? filtered
+    : ["clean composition", "restrained decor", "calm interior", "table-focused framing"];
+}
+
 function emptyTableDisciplineDirective(product: ProductAnalysis): string {
   return [
-    "visible dining table must stay completely empty",
-    "no dishware, glassware, serving ware, cutlery, food, or table setting anywhere on the visible table",
-    "background props must stay off the visible table and remain secondary",
+    "keep the reserved tabletop placement area open and clean",
+    "avoid extra dishware, glassware, serving ware, cutlery, or food on the visible foreground table",
+    "background decor should stay secondary and away from the reserved placement area",
     `never render another ${promptCategory(product)} in the scene`
   ].join(", ");
 }
@@ -315,14 +367,14 @@ function filteredAccentProps(style: StylePreset, product: ProductAnalysis): stri
   });
 }
 
-function kitchenSceneDirective(style: StylePreset): string {
+function kitchenSceneDirective(style: StylePreset, product: ProductAnalysis): string {
   return [
     "single premium kitchen or dining interior only",
-    "the dining table must stay visible and dominate the lower foreground",
-    "camera framing centered on the table surface rather than the whole room",
+    "the dining table must stay visible in the lower foreground",
+    "camera framing centered on the table surface rather than a wide room shot",
     `style palette cues: ${style.colorTone}`,
     `style surface cues: ${style.sceneProfile.tableSurface}`,
-    `style decor/material cues: ${style.sceneProfile.backgroundElements}`,
+    `style decor/material cues: ${filterStyleCueText(style.sceneProfile.backgroundElements, product)}`,
     `style composition cues: ${style.sceneProfile.composition}`,
     `required scene elements: ${style.sceneProfile.requiredElements.join(", ")}`
   ].join(", ");
@@ -416,28 +468,26 @@ function clarityDirective(aspectRatio: "1:1" | "4:5" | "9:16"): string {
 
 function buildRepresentativePrompt(style: StylePreset, product: ProductAnalysis): string {
   const accentProps = filteredAccentProps(style, product);
+  const styleKeywords = filteredStyleKeywords(style, product);
   const dimensionHint = promptDimensionHint(product);
 
   return [
     `premium ecommerce kitchen tabletop background for ${promptCategory(product)}`,
     promptProductDescriptor(product),
     dimensionHint,
-    kitchenSceneDirective(style),
+    kitchenSceneDirective(style, product),
     `foreground surface detail: ${style.sceneProfile.tableSurface}`,
-    `background styling cues: ${style.sceneProfile.backgroundElements}`,
+    `background styling cues: ${filterStyleCueText(style.sceneProfile.backgroundElements, product)}`,
     productPlacementDirective(product),
     emptyTableDisciplineDirective(product),
     backgroundObjectBanDirective(product),
-    style.promptKeywords.join(", "),
+    styleKeywords.join(", "),
     `allowed accent props: ${accentProps.join(", ") || "none"}`,
     "single kitchen or dining space only",
     "kitchen cabinetry or dining details kept secondary",
-    "clean empty placement area on the dining table",
-    "reserved product placement zone on the tabletop must stay empty",
-    "tabletop dominates the lower half of the frame",
-    "front table edge stays inside the frame",
-    "camera height aligned to the tabletop, not the whole room",
-    "only one clean empty placement zone on the visible table",
+    "clear usable tabletop visible in the lower foreground",
+    "reserved placement area remains open on the table surface",
+    "stable table-focused perspective",
     "single setup only",
     "do not render the product itself",
     "no duplicate object",
@@ -450,7 +500,6 @@ function buildRepresentativePrompt(style: StylePreset, product: ProductAnalysis)
     "do not copy the reference room layout",
     "centered composition",
     "clean commercial lighting",
-    "background only for later product compositing",
     clarityDirective("1:1"),
     "photorealistic",
     "no text"
@@ -463,25 +512,24 @@ function buildLifestylePrompt(
   aspectRatio: "4:5" | "9:16"
 ): string {
   const accentProps = filteredAccentProps(style, product);
+  const styleKeywords = filteredStyleKeywords(style, product);
   const dimensionHint = promptDimensionHint(product);
 
   return [
     `lifestyle kitchen-dining background scene for ${promptCategory(product)}`,
     promptProductDescriptor(product),
     dimensionHint,
-    kitchenSceneDirective(style),
+    kitchenSceneDirective(style, product),
     `foreground surface detail: ${style.sceneProfile.tableSurface}`,
-    `background styling cues: ${style.sceneProfile.backgroundElements}`,
+    `background styling cues: ${filterStyleCueText(style.sceneProfile.backgroundElements, product)}`,
     productPlacementDirective(product),
     emptyTableDisciplineDirective(product),
     backgroundObjectBanDirective(product),
-    style.promptKeywords.join(", "),
+    styleKeywords.join(", "),
     `allowed accent props: ${accentProps.join(", ") || "none"}`,
     "single kitchen or dining space only",
-    "clean placement area reserved on the dining table",
-    "reserved product placement zone on the tabletop must stay empty",
-    "tabletop clearly visible in the lower foreground",
-    "front table edge stays inside the frame",
+    "clear tabletop remains visible in the lower foreground",
+    "reserved placement area stays open on the table surface",
     "kitchen or dining table is the hero surface",
     "do not render the product itself",
     "no duplicate object",
@@ -493,7 +541,6 @@ function buildLifestylePrompt(
     "do not copy the reference room layout",
     "natural dining-table perspective",
     "props secondary",
-    "background only for later product compositing",
     "realistic table depth",
     clarityDirective(aspectRatio),
     "photorealistic",
