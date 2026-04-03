@@ -400,14 +400,14 @@ def _make_style_only_reference(image, size: tuple[int, int]):
         palette.append(dominant)
         patch = ImageOps.fit(crop, (tile_width, tile_height), method=Image.Resampling.LANCZOS)
         patch = ImageEnhance.Color(patch).enhance(1.08)
-        patch = ImageEnhance.Contrast(patch).enhance(0.92)
-        patch = ImageOps.posterize(patch, 5)
-        patch = patch.filter(ImageFilter.GaussianBlur(radius=max(18, int(min(size) * 0.022))))
+        patch = ImageEnhance.Contrast(patch).enhance(0.98)
+        patch = ImageOps.posterize(patch, 6)
+        patch = patch.filter(ImageFilter.GaussianBlur(radius=max(10, int(min(size) * 0.014))))
         patch = patch.resize(
-            (max(40, tile_width // 8), max(40, tile_height // 8)),
+            (max(56, tile_width // 5), max(56, tile_height // 5)),
             Image.Resampling.BICUBIC,
         ).resize((tile_width, tile_height), Image.Resampling.BICUBIC)
-        patch = Image.blend(Image.new("RGB", (tile_width, tile_height), dominant), patch, 0.46)
+        patch = Image.blend(Image.new("RGB", (tile_width, tile_height), dominant), patch, 0.62)
         texture_tiles.append(patch)
 
     base_color = palette[0] if palette else (236, 231, 223)
@@ -445,9 +445,9 @@ def _make_style_only_reference(image, size: tuple[int, int]):
             fill=color,
         )
 
-    card = card.filter(ImageFilter.GaussianBlur(radius=max(12, int(min(size) * 0.014))))
-    card = ImageEnhance.Color(card).enhance(1.02)
-    card = ImageEnhance.Contrast(card).enhance(0.96)
+    card = card.filter(ImageFilter.GaussianBlur(radius=max(7, int(min(size) * 0.008))))
+    card = ImageEnhance.Color(card).enhance(1.03)
+    card = ImageEnhance.Contrast(card).enhance(0.99)
     return card
 
 
