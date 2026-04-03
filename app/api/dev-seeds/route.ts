@@ -18,7 +18,8 @@ export async function GET() {
         ...seed.analysis,
         sourceImageSource: referenceAsset ? ("references" as const) : seed.analysis.sourceImageSource,
         sourceImageRelativePath: referenceAsset?.relativePath ?? seed.analysis.sourceImageRelativePath,
-        sourceImageUrl: referenceAsset?.url ?? seed.analysis.sourceImageUrl
+        sourceImageUrl: referenceAsset?.url ?? seed.analysis.sourceImageUrl,
+        supplementalImages: seed.analysis.supplementalImages ?? []
       };
 
       return {

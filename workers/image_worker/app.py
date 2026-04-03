@@ -166,6 +166,13 @@ class ProductDimensionsPayload(BaseModel):
     height_cm: Optional[float] = None
 
 
+class SupplementalImagePayload(BaseModel):
+    source_image_source: Literal["storage", "references"]
+    source_image_relative_path: str
+    source_image_data_url: Optional[str] = None
+    file_name: str = "view"
+
+
 class ProductPayload(BaseModel):
     category: str
     category_label: str
@@ -178,6 +185,7 @@ class ProductPayload(BaseModel):
     source_image_source: Literal["storage", "references"]
     source_image_relative_path: str
     source_image_data_url: Optional[str] = None
+    supplemental_images: List[SupplementalImagePayload] = Field(default_factory=list)
 
 
 class PromptVariantPayload(BaseModel):
@@ -611,6 +619,113 @@ def _dimension_height_ratio(product: ProductPayload) -> Optional[float]:
     if profile == "linear":
         return max(0.04, min(0.18, ratio))
     return max(0.12, min(1.2, ratio))
+
+
+def _expected_plan_aspect_ratio(product: ProductPayload) -> Optional[float]:
+    width = _dimension_value(product.dimensions_cm.width_cm)
+    depth = _dimension_value(product.dimensions_cm.depth_cm)
+
+    if width is None or depth is None:
+        return None
+
+    longer = max(width, depth)
+    shorter = min(width, depth)
+    if shorter <= 0:
+        return None
+
+    return longer / shorter
+
+
+def _expected_upright_view_ratio(product: ProductPayload) -> Optional[float]:
+    width = _dimension_value(product.dimensions_cm.width_cm)
+    depth = _dimension_value(product.dimensions_cm.depth_cm)
+    height = _dimension_value(product.dimensions_cm.height_cm)
+
+    if height is None:
+        return None
+
+    footprint = max(value for value in [width, depth] if value is not None) if any(
+        value is not None for value in [width, depth]
+    ) else None
+    if footprint is None or footprint <= 0:
+        return None
+
+    return footprint / height
+
+
+def _cutout_fill_ratio(cutout) -> float:
+    import numpy as np
+
+    alpha = np.array(cutout.getchannel("A"))
+    if alpha.size == 0:
+        return 0.0
+
+    return float((alpha > 24).mean())
+
+
+def _view_selection_score(image, product: ProductPayload, *, is_primary: bool) -> float:
+    cutout = _extract_product_cutout(image)
+    width, height = cutout.size
+    if width <= 0 or height <= 0:
+        return -1.0
+
+    profile = _placement_profile(product)
+    material_profile = _material_profile(product)
+    fill_ratio = _cutout_fill_ratio(cutout)
+    aspect_ratio = max(width, height) / max(min(width, height), 1)
+    orientation = abs(_estimate_cutout_orientation_degrees(cutout))
+    score = fill_ratio * 1.25
+
+    if profile == "flat":
+        expected_plan_aspect = _expected_plan_aspect_ratio(product)
+        orientation_score = max(0.0, 1.0 - orientation / 42.0)
+        score += orientation_score * 1.1
+        score += min(0.7, max(0.0, aspect_ratio - 1.0)) * 0.75
+        if expected_plan_aspect is not None:
+            ratio_gap = abs(aspect_ratio - expected_plan_aspect)
+            score += max(0.0, 1.0 - ratio_gap / max(expected_plan_aspect, 1.0)) * 0.9
+
+    elif profile == "upright":
+        expected_upright_ratio = _expected_upright_view_ratio(product)
+        orientation_score = max(0.0, 1.0 - orientation / 60.0)
+        score += orientation_score * 0.45
+        score += max(0.0, 1.0 - abs(aspect_ratio - 1.35) / 1.35) * 0.35
+        if expected_upright_ratio is not None:
+            ratio_gap = abs((width / max(height, 1)) - expected_upright_ratio)
+            score += max(0.0, 1.0 - ratio_gap / max(expected_upright_ratio, 0.35)) * 0.85
+
+    elif profile == "linear":
+        score += min(1.0, max(0.0, aspect_ratio - 1.3)) * 0.95
+        score += max(0.0, 1.0 - orientation / 70.0) * 0.25
+
+    else:
+        score += max(0.0, 1.0 - orientation / 55.0) * 0.3
+
+    if material_profile == "glass":
+        score += min(0.24, fill_ratio * 0.18)
+
+    if is_primary:
+        score += 0.08
+
+    return score
+
+
+def _select_best_product_view(primary_image, supplemental_images: list, product: ProductPayload):
+    candidates = [(primary_image, True)] + [(image, False) for image in supplemental_images]
+    best_image = primary_image
+    best_score = -1.0
+
+    for image, is_primary in candidates:
+        try:
+            score = _view_selection_score(image, product, is_primary=is_primary)
+        except Exception:
+            score = -1.0 if not is_primary else 0.0
+
+        if score > best_score:
+            best_score = score
+            best_image = image
+
+    return best_image
 
 
 def _dynamic_placement_width_ratio(
@@ -2136,6 +2251,19 @@ def generate(payload: GenerateRequest, authorization: Optional[str] = Header(def
         source=payload.product.source_image_source,
         relative_path=payload.product.source_image_relative_path,
     )
+    supplemental_images = [
+        _load_payload_image(
+            data_url=image.source_image_data_url,
+            source=image.source_image_source,
+            relative_path=image.source_image_relative_path,
+        )
+        for image in payload.product.supplemental_images
+    ]
+    selected_product_image = _select_best_product_view(
+        product_image,
+        supplemental_images,
+        payload.product,
+    )
 
     style_reference_images = []
     for reference in payload.style_references:
@@ -2222,7 +2350,7 @@ def generate(payload: GenerateRequest, authorization: Optional[str] = Header(def
                 ).images[0]
                 result = _compose_identity_locked_image(
                     scene_image=result,
-                    product_image=product_image,
+                    product_image=selected_product_image,
                     kind=kind,
                     product=payload.product,
                 )

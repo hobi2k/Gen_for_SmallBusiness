@@ -101,6 +101,7 @@ export function StyleSelectionPanel({
           analysis.dimensionsCm.heightCm ?? "?"
         ].join(" × ") + " cm"
       : "None";
+  const supplementalViewCount = analysis.supplementalImages.length;
 
   const styleOptions: Array<{
     id: StyleId;
@@ -153,6 +154,10 @@ export function StyleSelectionPanel({
         <div className="mini-card">
           <strong>실측 사이즈</strong>
           <span>{dimensionsLabel}</span>
+        </div>
+        <div className="mini-card">
+          <strong>보조 뷰</strong>
+          <span>{supplementalViewCount ? `${supplementalViewCount}장` : "없음"}</span>
         </div>
       </div>
 

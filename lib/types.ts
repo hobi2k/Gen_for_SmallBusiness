@@ -39,6 +39,13 @@ export type ProductSurfaceTone = "warm" | "cool" | "neutral" | "none";
 export type ProductImageSource = "storage" | "references" | null;
 export type ProductAnalysisSource = "seed" | "heuristic" | "vision" | "hybrid";
 
+export interface ProductSupplementalImage {
+  sourceImageSource: Exclude<ProductImageSource, null>;
+  sourceImageRelativePath: string;
+  sourceImageUrl: string;
+  fileName: string;
+}
+
 export type StyleId =
   | "modern-minimal"
   | "natural-wood"
@@ -64,6 +71,7 @@ export interface ProductAnalysis {
   sourceImageSource: ProductImageSource;
   sourceImageRelativePath: string | null;
   sourceImageUrl: string | null;
+  supplementalImages: ProductSupplementalImage[];
   category: ProductCategory;
   categoryLabel: string;
   materialNotes: string;

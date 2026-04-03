@@ -641,6 +641,7 @@ export async function analyzeProductUpload(
     sourceImageSource: null,
     sourceImageRelativePath: null,
     sourceImageUrl: null,
+    supplementalImages: [],
     category,
     categoryLabel,
     materialNotes,

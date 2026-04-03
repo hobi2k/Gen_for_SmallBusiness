@@ -34,6 +34,12 @@ interface ImageWorkerRequest {
     source_image_source: Exclude<ProductAnalysis["sourceImageSource"], null>;
     source_image_relative_path: string;
     source_image_data_url: string;
+    supplemental_images: Array<{
+      source_image_source: Exclude<ProductAnalysis["sourceImageSource"], null>;
+      source_image_relative_path: string;
+      source_image_data_url: string;
+      file_name: string;
+    }>;
   };
   prompts: {
     representative: WorkerPromptVariant[];
@@ -78,6 +84,29 @@ async function loadProductImageDataUrl(product: ProductAnalysis) {
 
   const asset = await readReferenceAsset(product.sourceImageRelativePath);
   return bufferToDataUrl(asset.buffer, inferReferenceMimeType(asset.fileName));
+}
+
+async function loadSupplementalImagePayloads(product: ProductAnalysis) {
+  return Promise.all(
+    product.supplementalImages.map(async (image) => {
+      const asset =
+        image.sourceImageSource === "storage"
+          ? await readStorageAsset(image.sourceImageRelativePath)
+          : await readReferenceAsset(image.sourceImageRelativePath);
+
+      const mimeType =
+        image.sourceImageSource === "storage"
+          ? inferStorageMimeType(asset.fileName)
+          : inferReferenceMimeType(asset.fileName);
+
+      return {
+        source_image_source: image.sourceImageSource,
+        source_image_relative_path: image.sourceImageRelativePath,
+        source_image_data_url: bufferToDataUrl(asset.buffer, mimeType),
+        file_name: image.fileName
+      };
+    })
+  );
 }
 
 function defaultWorkerTimeoutMs() {
@@ -140,6 +169,7 @@ export async function requestImageWorkerGeneration({
 
   const styleReferenceAssets = await getThemeReferenceAssets(styleId, 3);
   const productImageDataUrl = await loadProductImageDataUrl(product);
+  const supplementalImagePayloads = await loadSupplementalImagePayloads(product);
 
   if (!styleReferenceAssets.length || !productImageDataUrl) {
     return null;
@@ -178,7 +208,8 @@ export async function requestImageWorkerGeneration({
       },
       source_image_source: product.sourceImageSource,
       source_image_relative_path: product.sourceImageRelativePath,
-      source_image_data_url: productImageDataUrl
+      source_image_data_url: productImageDataUrl,
+      supplemental_images: supplementalImagePayloads
     },
     prompts: {
       representative: promptBundle.representative.map((item) => ({

@@ -23,6 +23,10 @@ const ROUTE = {
 export async function POST(request: Request) {
   const formData = await request.formData();
   const uploaded = formData.get("file");
+  const supplementalUploads = formData
+    .getAll("supplementalFiles")
+    .filter((item): item is File => item instanceof File)
+    .slice(0, 2);
   const rawMetadata = formData.get("metadata");
 
   if (!(uploaded instanceof File)) {
@@ -61,13 +65,26 @@ export async function POST(request: Request) {
       }
     },
     async () => {
-      const storedImage = await saveUploadedFile(uploaded, uploadToken);
+      const [storedImage, storedSupplementalImages] = await Promise.all([
+        saveUploadedFile(uploaded, uploadToken),
+        Promise.all(
+          supplementalUploads.map((file, index) =>
+            saveUploadedFile(file, uploadToken, `view${index + 1}`)
+          )
+        )
+      ]);
       const analysis = {
         ...(await analyzeProductUpload(uploaded, metadata)),
         uploadToken,
         sourceImageSource: "storage" as const,
         sourceImageRelativePath: storedImage.relativePath,
-        sourceImageUrl: storedImage.url
+        sourceImageUrl: storedImage.url,
+        supplementalImages: storedSupplementalImages.map((image, index) => ({
+          sourceImageSource: "storage" as const,
+          sourceImageRelativePath: image.relativePath,
+          sourceImageUrl: image.url,
+          fileName: supplementalUploads[index]?.name ?? `view${index + 1}`
+        }))
       };
       const recommendationResult = await recommendStyles(analysis);
       const generatedAt = new Date().toISOString();

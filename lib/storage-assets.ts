@@ -49,9 +49,14 @@ export function buildStorageAssetUrl(relativePath: string) {
   return `/api/storage-asset?path=${encodeURIComponent(normalizeRelativePath(relativePath))}`;
 }
 
-export async function saveUploadedFile(file: File, uploadToken: string) {
+export async function saveUploadedFile(
+  file: File,
+  uploadToken: string,
+  variantSuffix?: string
+) {
   const extension = extensionFromFile(file);
-  const relativePath = normalizeRelativePath(path.join("uploads", `${uploadToken}${extension}`));
+  const fileBaseName = variantSuffix ? `${uploadToken}_${variantSuffix}` : uploadToken;
+  const relativePath = normalizeRelativePath(path.join("uploads", `${fileBaseName}${extension}`));
   const { absolutePath } = safeStoragePath(relativePath);
   const buffer = Buffer.from(await file.arrayBuffer());
 
@@ -102,4 +107,3 @@ export function getGeneratedRootPath() {
 export function getStorageRootPath() {
   return STORAGE_ROOT;
 }
-

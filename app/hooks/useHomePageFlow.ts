@@ -33,6 +33,7 @@ interface ApplyRecommendationPayload {
 
 export interface HomePageFlowState {
   file: File | null;
+  supplementalFiles: File[];
   previewUrl: string | null;
   inputOverrides: ProductInputOverrides;
   analysis: ProductAnalysis | null;
@@ -104,6 +105,7 @@ export function useHomePageFlow({
   resultSectionId
 }: UseHomePageFlowOptions): HomePageFlowState {
   const [file, setFile] = useState<File | null>(null);
+  const [supplementalFiles, setSupplementalFiles] = useState<File[]>([]);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [inputOverrides, setInputOverrides] = useState<ProductInputOverrides>(
     EMPTY_PRODUCT_INPUT_OVERRIDES
@@ -181,6 +183,7 @@ export function useHomePageFlow({
 
   async function requestRecommendations(
     nextFile: File,
+    nextSupplementalFiles: File[],
     nextPreviewUrl: string,
     nextOverrides: ProductInputOverrides
   ) {
@@ -191,6 +194,9 @@ export function useHomePageFlow({
     try {
       const formData = new FormData();
       formData.append("file", nextFile);
+      nextSupplementalFiles.forEach((supplementalFile) => {
+        formData.append("supplementalFiles", supplementalFile);
+      });
       formData.append("metadata", JSON.stringify(nextOverrides));
 
       const response = await fetch("/api/recommend-styles", {
@@ -229,16 +235,19 @@ export function useHomePageFlow({
   }
 
   async function handleUpload(event: ChangeEvent<HTMLInputElement>) {
-    const nextFile = event.target.files?.[0];
+    const selectedFiles = Array.from(event.target.files ?? []);
+    const nextFile = selectedFiles[0];
 
     if (!nextFile) {
       return;
     }
+    const nextSupplementalFiles = selectedFiles.slice(1, 3);
 
     releasePreviewUrl(previewUrl);
 
     const nextPreviewUrl = URL.createObjectURL(nextFile);
     setFile(nextFile);
+    setSupplementalFiles(nextSupplementalFiles);
     setActiveSeedId(null);
     setPreviewUrl(nextPreviewUrl);
     setAnalysis(null);
@@ -248,7 +257,7 @@ export function useHomePageFlow({
     setGeneratedPackage(null);
     setRegenerateCount(0);
 
-    await requestRecommendations(nextFile, nextPreviewUrl, inputOverrides);
+    await requestRecommendations(nextFile, nextSupplementalFiles, nextPreviewUrl, inputOverrides);
   }
 
   function handleInputOverridesChange(patch: Partial<ProductInputOverrides>) {
@@ -265,12 +274,13 @@ export function useHomePageFlow({
     }
 
     setActiveSeedId(null);
-    await requestRecommendations(file, previewUrl, inputOverrides);
+    await requestRecommendations(file, supplementalFiles, previewUrl, inputOverrides);
   }
 
   function handleSeedLoad(seed: DevSeedPreview) {
     releasePreviewUrl(previewUrl);
     setFile(null);
+    setSupplementalFiles([]);
     setActiveSeedId(seed.id);
     setInputOverrides(EMPTY_PRODUCT_INPUT_OVERRIDES);
     applyRecommendationPayload({
@@ -370,6 +380,7 @@ export function useHomePageFlow({
 
   return {
     file,
+    supplementalFiles,
     previewUrl,
     inputOverrides,
     analysis,

@@ -10,6 +10,7 @@ import {
 
 interface UploadPanelProps {
   file: File | null;
+  supplementalFiles: File[];
   activeSeedId: string | null;
   previewUrl: string | null;
   recommending: boolean;
@@ -90,6 +91,7 @@ function parseOptionalNumber(value: string): number | null {
 
 export function UploadPanel({
   file,
+  supplementalFiles,
   activeSeedId,
   previewUrl,
   recommending,
@@ -115,8 +117,18 @@ export function UploadPanel({
         <label className="upload-dropzone">
           <div>
             <strong>파일 선택</strong>
-            <p className="help-text">JPG, PNG, WEBP 한 장이면 충분합니다.</p>
-            <input type="file" accept="image/*" onChange={onUpload} />
+            <p className="help-text">
+              대표 1장 필수, 보조 최대 2장 선택 가능. 한 장만 선택해도 기존 방식 그대로 동작합니다.
+            </p>
+            <input type="file" accept="image/*" multiple onChange={onUpload} />
+            {file ? (
+              <p className="help-text" style={{ marginTop: 8 }}>
+                대표 이미지: {file.name}
+                {supplementalFiles.length
+                  ? ` / 보조 이미지: ${supplementalFiles.map((item) => item.name).join(", ")}`
+                  : ""}
+              </p>
+            ) : null}
           </div>
         </label>
 
